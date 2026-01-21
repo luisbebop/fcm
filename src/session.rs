@@ -2,9 +2,6 @@
 //
 // Manages tmux sessions on VMs via SSH. The daemon tracks active sessions
 // and can create/list/kill sessions on demand.
-//
-// Note: Functions in this module will be wired up to daemon endpoints in a later task.
-#![allow(dead_code)]
 
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -20,8 +17,10 @@ pub enum SessionError {
     /// Session not found
     NotFound(String),
     /// VM not found or not running
+    #[allow(dead_code)] // Will be used in console streaming (Task 23/24)
     VmNotAvailable(String),
     /// SSH connection failed
+    #[allow(dead_code)] // Will be used in console streaming (Task 23/24)
     SshError(String),
     /// Tmux command failed
     TmuxError(String),
@@ -143,6 +142,7 @@ impl SessionManager {
     }
 
     /// Get a session by ID
+    #[allow(dead_code)] // Will be used in console streaming (Task 23/24)
     pub fn get_session(&self, session_id: &str) -> Option<SessionInfo> {
         let sessions = self.sessions.lock().unwrap();
         sessions.get(session_id).cloned()
@@ -175,6 +175,7 @@ impl SessionManager {
     }
 
     /// Remove all sessions for a VM (called when VM is stopped/destroyed)
+    #[allow(dead_code)] // Will be used when VM stop/destroy cleans up sessions
     pub fn remove_vm_sessions(&self, vm_id: &str) {
         let mut sessions = self.sessions.lock().unwrap();
         sessions.retain(|_, s| s.vm_id != vm_id);
@@ -274,6 +275,7 @@ fn kill_tmux_session(vm_ip: &str, session_name: &str) -> Result<(), SessionError
 
 /// Spawn an SSH process that attaches to a tmux session
 /// Returns the child process for I/O proxying
+#[allow(dead_code)] // Will be used in terminal streaming (Task 23/24)
 pub fn attach_to_session(vm_ip: &str, session_name: &str) -> Result<Child, SessionError> {
     let child = Command::new("ssh")
         .args([

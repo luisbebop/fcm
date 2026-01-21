@@ -1,7 +1,8 @@
 // Daemon HTTP server module
 
 use crate::network;
-use crate::vm::{self, VmConfig, VmState, VmError, BASE_DIR};
+use crate::session::{SessionError, SessionInfo, SessionManager};
+use crate::vm::{self, VmConfig, VmError, VmState, BASE_DIR};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
@@ -61,6 +62,36 @@ pub struct SshInfoResponse {
     pub ip: String,
     pub user: String,
     pub port: u16,
+}
+
+/// Session response (for API responses)
+#[derive(Debug, Serialize)]
+pub struct SessionResponse {
+    pub id: String,
+    pub vm_id: String,
+    pub tmux_session: String,
+    pub created_at: u64,
+    pub is_default: bool,
+}
+
+impl From<&SessionInfo> for SessionResponse {
+    fn from(info: &SessionInfo) -> Self {
+        SessionResponse {
+            id: info.id.clone(),
+            vm_id: info.vm_id.clone(),
+            tmux_session: info.tmux_session.clone(),
+            created_at: info.created_at,
+            is_default: info.is_default,
+        }
+    }
+}
+
+/// Request to create a session
+#[derive(Debug, Deserialize, Default)]
+struct CreateSessionRequest {
+    /// If true, create or return the default session
+    #[serde(default)]
+    is_default: bool,
 }
 
 /// Error response
@@ -151,16 +182,6 @@ fn send_json_response<T: Serialize>(
 /// Send an error response
 fn send_error(request: Request, status_code: u16, message: &str) -> Result<(), Box<dyn Error>> {
     send_json_response(request, status_code, &ErrorResponse { error: message.to_string() })
-}
-
-/// Extract VM identifier from path like /vms/{id}/action or /vms/{id}
-fn extract_vm_id(path: &str) -> Option<&str> {
-    let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
-    if parts.len() >= 2 && parts[0] == "vms" {
-        Some(parts[1])
-    } else {
-        None
-    }
 }
 
 /// Handle POST /vms - create a new VM
@@ -281,8 +302,106 @@ fn handle_destroy_vm(request: Request, vm_id: &str) -> Result<(), Box<dyn Error>
     }
 }
 
+/// Handle POST /vms/{id}/sessions - create a new session
+fn handle_create_session(
+    mut request: Request,
+    vm_id: &str,
+    session_manager: &SessionManager,
+) -> Result<(), Box<dyn Error>> {
+    // Find VM and validate it's running
+    let config = match vm::find_vm(vm_id) {
+        Ok(config) => config,
+        Err(_) => return send_error(request, 404, &format!("VM '{}' not found", vm_id)),
+    };
+
+    if config.state != VmState::Running {
+        return send_error(request, 400, &format!("VM '{}' is not running", vm_id));
+    }
+
+    // Parse request body for is_default flag
+    let create_request: CreateSessionRequest = {
+        let mut body = String::new();
+        request.as_reader().read_to_string(&mut body)?;
+        if body.is_empty() {
+            CreateSessionRequest::default()
+        } else {
+            serde_json::from_str(&body).unwrap_or_default()
+        }
+    };
+
+    // Create session
+    match session_manager.create_session(&config.id, &config.ip, create_request.is_default) {
+        Ok(session) => {
+            let response = SessionResponse::from(&session);
+            send_json_response(request, 201, &response)
+        }
+        Err(e) => {
+            let status = match &e {
+                SessionError::VmNotAvailable(_) => 503,
+                SessionError::SshError(_) => 502,
+                SessionError::TmuxError(_) => 500,
+                _ => 500,
+            };
+            send_error(request, status, &e.to_string())
+        }
+    }
+}
+
+/// Handle GET /vms/{id}/sessions - list active sessions for a VM
+fn handle_list_sessions(
+    request: Request,
+    vm_id: &str,
+    session_manager: &SessionManager,
+) -> Result<(), Box<dyn Error>> {
+    // Find VM to validate it exists
+    let config = match vm::find_vm(vm_id) {
+        Ok(config) => config,
+        Err(_) => return send_error(request, 404, &format!("VM '{}' not found", vm_id)),
+    };
+
+    // Sync sessions with actual tmux state if VM is running
+    if config.state == VmState::Running {
+        session_manager.sync_sessions(&config.id, &config.ip);
+    }
+
+    let sessions = session_manager.list_sessions(&config.id);
+    let response: Vec<SessionResponse> = sessions.iter().map(SessionResponse::from).collect();
+    send_json_response(request, 200, &response)
+}
+
+/// Handle DELETE /vms/{id}/sessions/{session-id} - kill a session
+fn handle_kill_session(
+    request: Request,
+    vm_id: &str,
+    session_id: &str,
+    session_manager: &SessionManager,
+) -> Result<(), Box<dyn Error>> {
+    // Find VM to get IP
+    let config = match vm::find_vm(vm_id) {
+        Ok(config) => config,
+        Err(_) => return send_error(request, 404, &format!("VM '{}' not found", vm_id)),
+    };
+
+    // Kill session
+    match session_manager.kill_session(session_id, &config.ip) {
+        Ok(()) => send_json_response(request, 200, &serde_json::json!({"deleted": true})),
+        Err(e) => {
+            let status = match &e {
+                SessionError::NotFound(_) => 404,
+                SessionError::VmNotAvailable(_) => 503,
+                _ => 500,
+            };
+            send_error(request, status, &e.to_string())
+        }
+    }
+}
+
 /// Route and handle a request
-fn handle_request(request: Request, token: &str) -> Result<(), Box<dyn Error>> {
+fn handle_request(
+    request: Request,
+    token: &str,
+    session_manager: &SessionManager,
+) -> Result<(), Box<dyn Error>> {
     let path = request.url().to_string();
     let method = request.method().clone();
 
@@ -306,33 +425,31 @@ fn handle_request(request: Request, token: &str) -> Result<(), Box<dyn Error>> {
             match parts.as_slice() {
                 ["vms", vm_id] => handle_get_vm(request, vm_id),
                 ["vms", vm_id, "ssh"] => handle_ssh_info(request, vm_id),
+                ["vms", vm_id, "sessions"] => {
+                    handle_list_sessions(request, vm_id, session_manager)
+                }
                 _ => send_error(request, 404, "Not found"),
             }
         }
         (Method::Post, path) if path.starts_with("/vms/") => {
-            if let Some(vm_id) = extract_vm_id(path) {
-                if path.ends_with("/stop") {
-                    handle_stop_vm(request, vm_id)
-                } else if path.ends_with("/start") {
-                    handle_start_vm(request, vm_id)
-                } else {
-                    send_error(request, 404, "Not found")
+            let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+            match parts.as_slice() {
+                ["vms", vm_id, "stop"] => handle_stop_vm(request, vm_id),
+                ["vms", vm_id, "start"] => handle_start_vm(request, vm_id),
+                ["vms", vm_id, "sessions"] => {
+                    handle_create_session(request, vm_id, session_manager)
                 }
-            } else {
-                send_error(request, 404, "Not found")
+                _ => send_error(request, 404, "Not found"),
             }
         }
         (Method::Delete, path) if path.starts_with("/vms/") => {
-            if let Some(vm_id) = extract_vm_id(path) {
-                // Make sure it's just /vms/{id} and not /vms/{id}/something
-                let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
-                if parts.len() == 2 {
-                    handle_destroy_vm(request, vm_id)
-                } else {
-                    send_error(request, 404, "Not found")
+            let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+            match parts.as_slice() {
+                ["vms", vm_id] => handle_destroy_vm(request, vm_id),
+                ["vms", vm_id, "sessions", session_id] => {
+                    handle_kill_session(request, vm_id, session_id, session_manager)
                 }
-            } else {
-                send_error(request, 404, "Not found")
+                _ => send_error(request, 404, "Not found"),
             }
         }
 
@@ -365,13 +482,16 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     // Load or create auth token
     let token = load_or_create_token()?;
 
+    // Create session manager for persistent console sessions
+    let session_manager = SessionManager::new();
+
     // Create HTTP server
     let server = Server::http(BIND_ADDR).map_err(|e| format!("Failed to bind to {}: {}", BIND_ADDR, e))?;
     println!("Daemon listening on http://{}", BIND_ADDR);
 
     // Handle requests
     for request in server.incoming_requests() {
-        if let Err(e) = handle_request(request, &token) {
+        if let Err(e) = handle_request(request, &token, &session_manager) {
             eprintln!("Error handling request: {}", e);
         }
     }
@@ -403,12 +523,29 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_vm_id() {
-        assert_eq!(extract_vm_id("/vms/abc123"), Some("abc123"));
-        assert_eq!(extract_vm_id("/vms/abc123/stop"), Some("abc123"));
-        assert_eq!(extract_vm_id("/vms/abc123/ssh"), Some("abc123"));
-        assert_eq!(extract_vm_id("/vms"), None);
-        assert_eq!(extract_vm_id("/other"), None);
+    fn test_session_response_from_info() {
+        let info = SessionInfo {
+            id: "abc123".to_string(),
+            vm_id: "vm456".to_string(),
+            tmux_session: "fcm-abc123".to_string(),
+            created_at: 1700000000,
+            is_default: true,
+        };
+        let response = SessionResponse::from(&info);
+        assert_eq!(response.id, "abc123");
+        assert_eq!(response.vm_id, "vm456");
+        assert_eq!(response.tmux_session, "fcm-abc123");
+        assert_eq!(response.created_at, 1700000000);
+        assert!(response.is_default);
+    }
+
+    #[test]
+    fn test_create_session_request_default() {
+        let request: CreateSessionRequest = serde_json::from_str("{}").unwrap();
+        assert!(!request.is_default);
+
+        let request: CreateSessionRequest = serde_json::from_str(r#"{"is_default": true}"#).unwrap();
+        assert!(request.is_default);
     }
 
     #[test]
