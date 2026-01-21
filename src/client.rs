@@ -1,6 +1,6 @@
 // HTTP client module for communicating with the daemon
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::env;
 use std::error::Error;
 use std::fs;
@@ -9,14 +9,6 @@ use std::process::Command;
 
 const DAEMON_URL: &str = "http://127.0.0.1:7777";
 
-/// Request body for creating a VM
-#[derive(Debug, Serialize)]
-struct CreateVmRequest {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    expose: Option<u16>,
-}
 
 /// Response for VM operations
 #[derive(Debug, Deserialize)]
@@ -122,11 +114,8 @@ fn make_request(
 }
 
 /// Create a new VM
-pub fn create_vm(name: Option<String>, expose: Option<u16>) -> Result<(), Box<dyn Error>> {
-    let request = CreateVmRequest { name, expose };
-    let body = serde_json::to_string(&request)?;
-
-    let response = make_request("POST", "/vms", Some(body))?;
+pub fn create_vm() -> Result<(), Box<dyn Error>> {
+    let response = make_request("POST", "/vms", None)?;
     let vm: VmResponse = response.into_json()?;
 
     println!("Created VM:");
@@ -242,28 +231,6 @@ mod tests {
     fn test_token_path() {
         let path = token_path();
         assert!(path.ends_with(".fcm-token"));
-    }
-
-    #[test]
-    fn test_create_vm_request_serialization() {
-        let req = CreateVmRequest {
-            name: Some("test".to_string()),
-            expose: Some(8000),
-        };
-        let json = serde_json::to_string(&req).unwrap();
-        assert!(json.contains("\"name\":\"test\""));
-        assert!(json.contains("\"expose\":8000"));
-    }
-
-    #[test]
-    fn test_create_vm_request_minimal_serialization() {
-        let req = CreateVmRequest {
-            name: None,
-            expose: None,
-        };
-        let json = serde_json::to_string(&req).unwrap();
-        // Should be empty object when both are None
-        assert_eq!(json, "{}");
     }
 
     #[test]

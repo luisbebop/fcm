@@ -18,14 +18,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Create a new VM
-    Create {
-        /// Optional name for the VM
-        #[arg(long)]
-        name: Option<String>,
-        /// Port to expose via Caddy
-        #[arg(long)]
-        expose: Option<u16>,
-    },
+    Create,
     /// List all VMs
     Ls,
     /// SSH into a VM
@@ -56,8 +49,8 @@ fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Create { name, expose } => {
-            if let Err(e) = client::create_vm(name, expose) {
+        Commands::Create => {
+            if let Err(e) = client::create_vm() {
                 eprintln!("Error creating VM: {}", e);
                 std::process::exit(1);
             }

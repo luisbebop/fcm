@@ -3,7 +3,7 @@
 use crate::network;
 use crate::vm::{self, VmConfig, VmState, VmError, BASE_DIR};
 use rand::Rng;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::error::Error;
 use std::fs;
 use std::path::PathBuf;
@@ -11,12 +11,8 @@ use tiny_http::{Header, Method, Request, Response, Server};
 
 const BIND_ADDR: &str = "127.0.0.1:7777";
 
-/// Request body for creating a VM
-#[derive(Debug, Deserialize)]
-pub struct CreateVmRequest {
-    pub name: Option<String>,
-    pub expose: Option<u16>,
-}
+/// Default port to expose for all VMs
+const DEFAULT_EXPOSE_PORT: u16 = 8000;
 
 /// Response for VM operations
 #[derive(Debug, Serialize)]
@@ -151,16 +147,6 @@ fn send_error(request: Request, status_code: u16, message: &str) -> Result<(), B
     send_json_response(request, status_code, &ErrorResponse { error: message.to_string() })
 }
 
-/// Parse JSON body from request
-fn parse_json_body<T: for<'de> Deserialize<'de>>(request: &mut Request) -> Result<T, String> {
-    let mut body = String::new();
-    request
-        .as_reader()
-        .read_to_string(&mut body)
-        .map_err(|e| format!("Failed to read body: {}", e))?;
-    serde_json::from_str(&body).map_err(|e| format!("Invalid JSON: {}", e))
-}
-
 /// Extract VM identifier from path like /vms/{id}/action or /vms/{id}
 fn extract_vm_id(path: &str) -> Option<&str> {
     let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
@@ -172,14 +158,9 @@ fn extract_vm_id(path: &str) -> Option<&str> {
 }
 
 /// Handle POST /vms - create a new VM
-fn handle_create_vm(mut request: Request) -> Result<(), Box<dyn Error>> {
-    let create_req: CreateVmRequest = match parse_json_body(&mut request) {
-        Ok(req) => req,
-        Err(e) => return send_error(request, 400, &e),
-    };
-
-    // Use the VM lifecycle function to create the VM
-    match vm::create_vm(create_req.name, create_req.expose) {
+fn handle_create_vm(request: Request) -> Result<(), Box<dyn Error>> {
+    // Always use random name and expose port 8000 by default
+    match vm::create_vm(None, Some(DEFAULT_EXPOSE_PORT)) {
         Ok(config) => {
             let response = VmResponse::from(&config);
             send_json_response(request, 201, &response)
@@ -429,18 +410,7 @@ mod tests {
     }
 
     #[test]
-    fn test_create_vm_request_deserialization() {
-        let json = r#"{"name": "myvm", "expose": 8000}"#;
-        let req: CreateVmRequest = serde_json::from_str(json).unwrap();
-        assert_eq!(req.name, Some("myvm".to_string()));
-        assert_eq!(req.expose, Some(8000));
-    }
-
-    #[test]
-    fn test_create_vm_request_minimal() {
-        let json = r#"{}"#;
-        let req: CreateVmRequest = serde_json::from_str(json).unwrap();
-        assert!(req.name.is_none());
-        assert!(req.expose.is_none());
+    fn test_default_expose_port() {
+        assert_eq!(DEFAULT_EXPOSE_PORT, 8000);
     }
 }
