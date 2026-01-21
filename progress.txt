@@ -328,5 +328,11 @@
 - All 64 tests pass with zero warnings
 - Commit: 4f12443
 
+### Task 19: Bind Daemon to All Interfaces for External Access
+- Changed BIND_ADDR from "127.0.0.1:7777" to "0.0.0.0:7777"
+- Allows remote CLI clients to connect without SSH tunneling
+- Token authentication still required for all requests
+- Commit: e56a284
+
 ## Next Tasks
 - None remaining - core implementation complete
