@@ -377,8 +377,25 @@
 - All 79 tests pass (single-threaded; 2 pre-existing test isolation issues with parallel env vars)
 - Commit: b9eb527
 
+### Task 22: Wire Session Endpoints to Daemon
+- Wired session management endpoints to daemon HTTP server
+- Added SessionResponse type for API responses (converts SessionInfo to JSON)
+- Added CreateSessionRequest type with is_default field for session creation
+- Imported session module into daemon.rs
+- Created SessionManager instance in daemon's run() function
+- Added three new handlers:
+  - handle_create_session(): POST /vms/{id}/sessions - creates new tmux session
+  - handle_list_sessions(): GET /vms/{id}/sessions - lists active sessions for a VM
+  - handle_kill_session(): DELETE /vms/{id}/sessions/{session-id} - kills a session
+- Refactored routing to use pattern matching on path parts (cleaner than if/else chains)
+- Removed unused extract_vm_id() function (replaced by pattern matching)
+- Updated tests: replaced test_extract_vm_id with test_session_response_from_info and test_create_session_request_default
+- Removed module-level #![allow(dead_code)] from session.rs
+- Added specific #[allow(dead_code)] attributes to items that will be used in future tasks
+- All 80 tests pass with zero warnings
+- Commit: 48a3093
+
 ## Next Tasks
-- Task 22: Wire session endpoints to daemon (POST/GET/DELETE /vms/{id}/sessions)
 - Task 23: Console streaming module (console.rs) for terminal client
 - Task 24: Terminal server on port 7778 in daemon
 - Task 25: Update CLI with console/sessions/attach commands
