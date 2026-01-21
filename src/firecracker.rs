@@ -312,7 +312,7 @@ pub fn generate_mac(vm_id: &str) -> String {
 /// Build kernel boot args for a VM
 pub fn build_boot_args(vm_name: &str, vm_ip: &str, gateway: &str) -> String {
     format!(
-        "console=ttyS0 reboot=k panic=1 pci=off ip={}::{}:255.255.255.0:{}:eth0:on",
+        "console=ttyS0 reboot=k panic=1 pci=off init=/sbin/init root=/dev/vda rw ip={}::{}:255.255.255.0:{}:eth0:on",
         vm_ip, gateway, vm_name
     )
 }
