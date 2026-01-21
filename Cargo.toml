@@ -12,3 +12,6 @@ tiny_http = "0.12"
 ureq = { version = "2", features = ["json"] }
 libc = "0.2"
 dirs = "5"
+
+[dev-dependencies]
+tempfile = "3"
