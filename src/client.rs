@@ -136,8 +136,8 @@ pub fn list_vms() -> Result<(), Box<dyn Error>> {
 
     // Print header
     println!(
-        "{:<12} {:<20} {:<16} {:<10} {}",
-        "ID", "NAME", "IP", "STATE", "DOMAIN"
+        "{:<12} {:<20} {:<16} {:<10} DOMAIN",
+        "ID", "NAME", "IP", "STATE"
     );
     println!("{}", "-".repeat(80));
 

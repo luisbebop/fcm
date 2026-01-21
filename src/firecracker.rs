@@ -190,7 +190,7 @@ impl FirecrackerClient {
         let body = serde_json::to_string(data)?;
         let (status, response_body) = self.request("PUT", path, Some(&body))?;
 
-        if status >= 200 && status < 300 {
+        if (200..300).contains(&status) {
             Ok(())
         } else {
             let msg = if response_body.is_empty() {

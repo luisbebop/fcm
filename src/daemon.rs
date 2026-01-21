@@ -117,7 +117,7 @@ fn validate_auth(request: &Request, token: &str) -> bool {
     for header in request.headers() {
         let field_str: &str = header.field.as_str().into();
         if field_str.eq_ignore_ascii_case("authorization") {
-            let value: &str = header.value.as_str().into();
+            let value: &str = header.value.as_str();
             if let Some(bearer_token) = value.strip_prefix("Bearer ") {
                 return bearer_token.trim() == token;
             }
