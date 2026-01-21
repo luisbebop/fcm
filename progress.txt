@@ -261,6 +261,8 @@
 - Random name is automatically used for the sslip.io domain
 - All 66 tests pass
 - Commit: 0c71ca5
+- Fix: Domain now correctly uses VM name (e.g., nebula-tensor.64-34-93-45.sslip.io)
+- Commit: 02a883b
 
 ## Next Tasks
 - None remaining - core implementation complete
