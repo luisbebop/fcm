@@ -316,5 +316,17 @@
 - All 61 tests pass with zero warnings
 - Commit: 958aaa8
 
+### Task 18: FCM_HOST Environment Variable for Remote Connections
+- Added support for connecting to remote daemon via FCM_HOST env var
+- client.rs:
+  - Added daemon_url() function to get daemon URL from FCM_HOST or default
+  - Supports both bare host:port (e.g., "192.168.1.100:7777") and full URLs
+  - Automatically prepends "http://" if no scheme provided
+  - Defaults to "http://127.0.0.1:7777" when FCM_HOST not set
+  - Updated make_request() to use daemon_url() instead of hardcoded constant
+  - Added 3 unit tests for daemon URL handling
+- All 64 tests pass with zero warnings
+- Commit: 4f12443
+
 ## Next Tasks
 - None remaining - core implementation complete
