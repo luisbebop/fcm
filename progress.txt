@@ -1,0 +1,252 @@
+# FCM Implementation Progress
+
+## Completed Tasks
+
+### Task 1: Project Structure and CLI Parsing
+- Created Cargo.toml with dependencies (clap, serde, serde_json, rand, tiny_http, ureq)
+- Created src/main.rs with full CLI parsing using clap derive
+- Commands implemented: create, ls, ssh, stop, start, destroy, daemon
+- Created stub modules: client.rs, daemon.rs, vm.rs, firecracker.rs, network.rs, caddy.rs
+- All modules compile, tests pass
+- Commit: 4e93d71
+
+### Task 2: VM Config Types and Name Generation
+- Implemented VmConfig struct with id, name, ip, state, expose fields
+- Implemented VmState enum (Running, Stopped)
+- Implemented ExposeConfig struct for port/domain exposure
+- Added word lists (ADJECTIVES, NOUNS) per PRD spec
+- Implemented generate_id() for 8-char alphanumeric IDs
+- Implemented random_name() for adjective-noun combinations
+- Added helper methods: dir(), config_path(), rootfs_path(), socket_path(), pid_path()
+- Added save() and load() methods for config persistence
+- Added list_vms() and find_vm() functions for VM discovery
+- Added 9 unit tests covering all functionality
+- Commit: a3c8601
+
+### Task 3: Daemon HTTP Server
+- Implemented HTTP server on localhost:7777 using tiny_http
+- Token-based authentication with Bearer header validation
+- Auto-generates 32-char token on first run, saves to /var/lib/firecracker/.token
+- Token file has restricted permissions (0600)
+- REST API routes implemented:
+  - POST /vms - create VM (saves config to disk)
+  - GET /vms - list all VMs
+  - GET /vms/{id} - get VM details
+  - GET /vms/{id}/ssh - get SSH connection info
+  - POST /vms/{id}/stop - stop VM
+  - POST /vms/{id}/start - start VM
+  - DELETE /vms/{id} - destroy VM (removes directory)
+- JSON request/response handling with proper error responses
+- Root check warning on startup
+- Added 7 unit tests for token generation, routing, and serialization
+- Added libc dependency for euid check
+- Commit: 614b86b
+
+### Task 4: Client HTTP Requests with Token Auth
+- Implemented HTTP client using ureq with json feature
+- Token loading from FCM_TOKEN env var or ~/.fcm-token file
+- Added dirs dependency for cross-platform home directory detection
+- make_request() helper for authenticated requests to daemon
+- Implemented all client functions:
+  - create_vm() - POST /vms with name/expose options
+  - list_vms() - GET /vms with formatted table output
+  - ssh_vm() - GET /vms/{id}/ssh then exec ssh command
+  - stop_vm() - POST /vms/{id}/stop
+  - start_vm() - POST /vms/{id}/start
+  - destroy_vm() - DELETE /vms/{id}
+- Proper error handling for connection failures and HTTP errors
+- Added 8 unit tests for serialization, deserialization, and token loading
+- Commit: 2c8a1c9
+
+### Task 5: Firecracker API over Unix Socket
+- Implemented FirecrackerClient struct for unix socket communication
+- HTTP over unix socket with request/response parsing
+- Request types: BootSource, Drive, MachineConfig, NetworkInterface
+- Action types: InstanceStart, SendCtrlAltDel for VM control
+- API methods:
+  - set_boot_source() - configure kernel and boot args
+  - set_drive() - configure rootfs drive
+  - set_machine_config() - configure vcpu count and memory
+  - set_network_interface() - configure network interface with MAC
+  - start_instance() - start the VM
+  - send_ctrl_alt_del() - graceful shutdown
+  - get_instance_info() - get VM status
+  - is_available() - check socket connectivity
+- Helper functions: generate_mac(), build_boot_args()
+- FirecrackerError enum with Display impl for error handling
+- Added 17 unit tests for serialization, parsing, and helpers
+- Commit: f505e61
+
+### Task 6: Network Setup (Tap Devices and IP Allocation)
+- Implemented NetworkError enum with Display impl for error handling
+- Network constants: GATEWAY (172.16.0.1), SUBNET_MASK, SUBNET_CIDR
+- IP allocation from pool (172.16.0.50-254)
+- Tap device management:
+  - tap_name() - generates tap device name (tap_<vm_id>)
+  - create_tap() - creates tap device, brings it up, adds to bridge
+  - delete_tap() - removes tap device
+- Network bridge setup:
+  - setup_network() - creates fcm0 bridge, assigns gateway IP, enables forwarding
+  - cleanup_network() - removes bridge and nftables rules
+- nftables masquerade setup for NAT (allows VMs to access internet)
+- Helper functions:
+  - allocate_ip() - finds first available IP in pool
+  - get_used_ips() - gets IPs currently in use by VMs
+  - parse_last_octet() - parses last octet from IP string
+  - is_valid_vm_ip() - validates IP is in VM range
+- Added 12 unit tests covering all functionality
+- Commit: 670e9c5
+
+### Task 7: Caddy Config Management
+- Implemented CaddyError enum with Display impl for error handling
+- Added CADDYFILE_PATH constant (/etc/caddy/Caddyfile)
+- Server IP detection:
+  - get_server_ip() - fetches public IP via ifconfig.me or icanhazip.com
+  - is_valid_ipv4() - validates IPv4 address format
+- Domain generation:
+  - generate_domain() - creates sslip.io domain (e.g., myvm.64-34-93-45.sslip.io)
+- Caddyfile management:
+  - add_site() / add_site_to_file() - adds reverse proxy block to Caddyfile
+  - remove_site() / remove_site_from_file() - removes managed block from Caddyfile
+  - generate_caddy_block() - generates Caddy config block with fcm-managed marker
+  - remove_site_block() - parses and removes site block using brace counting
+  - update_site_in_file() - updates existing site configuration
+- Caddy control:
+  - reload() - reloads Caddy via systemctl or caddy CLI
+  - is_running() - checks if Caddy service is active
+  - validate() / validate_file() - validates Caddyfile syntax
+- Added tempfile dev-dependency for tests
+- Added 12 unit tests covering all functionality
+- Commit: 44ac827
+
+### Task 8: VM Lifecycle Management
+- Implemented VmError enum that unifies errors from all modules (IO, Network, Firecracker, Caddy)
+- Added From implementations for error conversion from all module error types
+- Added constants: KERNEL_PATH, BASE_ROOTFS_PATH, DEFAULT_VCPU_COUNT (1), DEFAULT_MEM_SIZE_MIB (512)
+- Implemented create_vm():
+  - Checks for required kernel and rootfs files
+  - Allocates IP from pool via network module
+  - Creates VM directory and copies rootfs with sparse support (cp --sparse=always)
+  - Creates tap device and adds to bridge
+  - Spawns firecracker process
+  - Waits for socket availability with configurable timeout
+  - Configures boot source, drive, machine config, network interface via Firecracker API
+  - Starts the VM instance
+  - Configures Caddy if port exposure requested
+  - Proper cleanup on any failure (removes directory, tap device, kills process)
+- Implemented stop_vm():
+  - Validates VM exists and is running
+  - Attempts graceful shutdown via Ctrl+Alt+Del
+  - Kills firecracker process (SIGTERM then SIGKILL)
+  - Deletes tap device
+  - Updates VM state to Stopped
+- Implemented start_vm():
+  - Validates VM exists and is stopped
+  - Creates tap device
+  - Spawns and configures new firecracker process
+  - Starts the VM instance
+  - Updates VM state to Running
+- Implemented destroy_vm():
+  - Stops VM if running (graceful then forced)
+  - Deletes tap device
+  - Removes Caddy site configuration if exposed
+  - Removes VM directory completely
+- Helper functions:
+  - spawn_firecracker() - spawns firecracker process with API socket
+  - kill_firecracker() - kills process by PID from file
+  - wait_for_socket() - polls for socket availability with timeout
+  - cleanup_failed_vm() - cleanup helper for create failures
+  - is_vm_running() - checks if firecracker process is alive
+  - sync_vm_state() - syncs config state with actual process state
+- Added 6 unit tests for VmError and constants
+- Commit: f83ce1e
+
+### Task 9: Wire Daemon Handlers to VM Lifecycle Functions
+- Updated daemon HTTP handlers to use actual VM lifecycle functions from vm module
+- handle_create_vm() now calls vm::create_vm() instead of placeholder config creation
+- handle_stop_vm() now calls vm::stop_vm() instead of just updating config state
+- handle_start_vm() now calls vm::start_vm() instead of just updating config state
+- handle_destroy_vm() now calls vm::destroy_vm() instead of just removing directory
+- Added proper HTTP error mapping based on VmError variants:
+  - VmError::NotFound -> 404
+  - VmError::InvalidState -> 400
+  - VmError::ResourceNotAvailable -> 503
+  - Other errors -> 500
+- Imported VmError type for error handling
+- All 69 tests pass
+- Commit: d3b4b17
+
+### Task 10: Integrate Network Setup on Daemon Startup
+- Added network module import to daemon.rs
+- Call network::setup_network() in daemon's run() function before starting HTTP server
+- Network setup creates fcm0 bridge, assigns 172.16.0.1 gateway IP, enables IP forwarding
+- Sets up nftables masquerade for VM outbound traffic (NAT)
+- Errors are handled gracefully with warning messages (doesn't block daemon startup)
+- All 69 tests pass
+- Commit: bf535d6
+
+### Task 11: Base Rootfs Image Build Scripts
+- Created rootfs/ directory for base image build files
+- Created Dockerfile as specified in PRD:
+  - Based on alpine:edge
+  - Installs openssh, ruby, ruby-bundler, python3, py3-pip, curl, bash, iproute2
+  - Configures SSH with root login enabled (root:root password)
+  - Copies init script to /sbin/init
+- Created init script for VM initialization:
+  - Mounts essential filesystems (proc, sysfs, devtmpfs, devpts)
+  - Creates necessary device nodes if missing
+  - Sets hostname from kernel cmdline if available
+  - Configures DNS (8.8.8.8, 8.8.4.4)
+  - Starts sshd
+  - Runs placeholder HTTP server on port 8000 using python3
+  - Keeps init process running with bash login shell
+- Created build.sh script to automate rootfs creation:
+  - Builds Docker image from Dockerfile
+  - Exports container filesystem to tarball
+  - Creates sparse ext4 filesystem image (1GB apparent, ~400MB actual)
+  - Extracts rootfs tarball into ext4 image
+  - Outputs to /var/lib/firecracker/base-rootfs.img by default
+- All 69 tests pass
+- Commit: 30c52ca
+
+### Task 12: Fix Init Script Hostname Parsing
+- Fixed hostname parsing in rootfs/init script
+- Init script was incorrectly looking for `hostname=` kernel argument
+- Boot args actually pass hostname as 5th field of `ip=` parameter
+- Format: `ip=<client-ip>:<server-ip>:<gw-ip>:<netmask>:<hostname>:<device>:<autoconf>`
+- Example: `ip=172.16.0.50::172.16.0.1:255.255.255.0:myvm:eth0:on`
+- Updated parsing logic to extract hostname from ip= parameter correctly
+- Also fixed comment that incorrectly showed empty hostname field
+- All 69 tests pass
+- Commit: 8ac22cd
+
+### Task 13: Fix VM Boot with Dropbear SSH and Entropy Initialization
+- Fixed multiple issues preventing VMs from booting and running SSH correctly
+- Updated src/firecracker.rs build_boot_args():
+  - Added `init=/sbin/init root=/dev/vda rw` to kernel boot arguments
+  - These parameters are required for the kernel to mount rootfs and run init
+- Replaced OpenSSH with dropbear in rootfs/Dockerfile:
+  - OpenSSH sshd caused init process to die when daemonizing (PID 1 issue)
+  - Dropbear is lighter weight and works correctly in minimal VM environment
+  - Pre-generates host keys during image build (RSA, ECDSA, ED25519)
+- Added rng-tools package to rootfs/Dockerfile:
+  - SSH was timing out during banner exchange due to uninitialized kernel RNG
+  - rngd feeds entropy from /dev/urandom to /dev/random to initialize CRNG
+- Complete rewrite of rootfs/init script:
+  - Uses `mountpoint -q` to check if filesystems are already mounted (avoids errors)
+  - Removed `set -e` to prevent init from dying on non-fatal errors
+  - Starts rngd in background for entropy
+  - Starts dropbear SSH server in foreground mode (`-R -F -E`)
+  - Starts python3 HTTP server on port 8000 for testing
+  - Improved logging to /var/log/init.log (also exposed via HTTP at /init.log)
+- Tested full fcm workflow:
+  - `fcm daemon` starts correctly, sets up fcm0 bridge
+  - `fcm create` creates and starts VM
+  - `fcm ls` lists running VMs with correct state
+  - SSH works via `sshpass -p "root" ssh root@<vm-ip>`
+  - `fcm stop`, `fcm start`, `fcm destroy` all work correctly
+- All 69 tests pass
+- Commit: c090b6c
+
+## Next Tasks
+- None remaining - core implementation complete
