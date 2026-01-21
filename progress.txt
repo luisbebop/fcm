@@ -334,5 +334,20 @@
 - Token authentication still required for all requests
 - Commit: e56a284
 
+### Task 20: SSH ProxyJump for Remote Daemon Connections
+- Fixed SSH failing when CLI runs on external machine (e.g., Mac connecting to remote server)
+- Problem: `fcm ssh` tried to connect directly to VM's internal IP (172.16.0.x)
+- Solution: Use SSH ProxyJump (-J) to tunnel through the daemon host
+- client.rs:
+  - Added get_jump_host() function to detect remote daemon and build jump host string
+  - Extracts hostname from FCM_HOST (strips scheme and port)
+  - Returns None for localhost/127.0.0.1 (no jump needed)
+  - Uses current user ($USER) for jump host authentication
+  - Updated ssh_vm() to add -J flag when connecting to remote daemon
+  - Shows "Connecting via jump_host..." message for remote connections
+  - Added 4 unit tests for get_jump_host() function
+- All 68 tests pass with zero warnings
+- Commit: a28be91
+
 ## Next Tasks
 - None remaining - core implementation complete
