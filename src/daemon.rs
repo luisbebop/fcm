@@ -1,5 +1,6 @@
 // Daemon HTTP server module
 
+use crate::network;
 use crate::vm::{self, VmConfig, VmState, VmError, BASE_DIR};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -354,6 +355,13 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         if unsafe { libc::geteuid() } != 0 {
             eprintln!("Warning: daemon should be run as root for firecracker operations");
         }
+    }
+
+    // Setup network bridge and masquerading
+    println!("Setting up network...");
+    if let Err(e) = network::setup_network() {
+        eprintln!("Warning: Failed to setup network: {}", e);
+        eprintln!("VM networking may not work correctly");
     }
 
     // Load or create auth token
