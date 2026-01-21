@@ -1,6 +1,6 @@
 // HTTP client module for communicating with the daemon
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::env;
 use std::error::Error;
 use std::fs;
@@ -8,6 +8,12 @@ use std::path::PathBuf;
 use std::process::Command;
 
 const DAEMON_URL: &str = "http://127.0.0.1:7777";
+
+/// Request to create a VM with SSH public key
+#[derive(Debug, Serialize)]
+struct CreateVmRequest {
+    ssh_public_key: Option<String>,
+}
 
 
 /// Response for VM operations
@@ -113,9 +119,40 @@ fn make_request(
     }
 }
 
+/// Find and read the user's SSH public key
+fn find_ssh_public_key() -> Option<String> {
+    let home = dirs::home_dir()?;
+    let ssh_dir = home.join(".ssh");
+
+    // Try common public key files in order of preference
+    let key_files = ["id_ed25519.pub", "id_ecdsa.pub", "id_rsa.pub"];
+
+    for key_file in &key_files {
+        let path = ssh_dir.join(key_file);
+        if path.exists() {
+            if let Ok(key) = fs::read_to_string(&path) {
+                let key = key.trim().to_string();
+                if !key.is_empty() {
+                    return Some(key);
+                }
+            }
+        }
+    }
+
+    None
+}
+
 /// Create a new VM
 pub fn create_vm() -> Result<(), Box<dyn Error>> {
-    let response = make_request("POST", "/vms", None)?;
+    let ssh_public_key = find_ssh_public_key();
+    if ssh_public_key.is_none() {
+        eprintln!("Warning: No SSH public key found in ~/.ssh/, password auth will be required");
+    }
+
+    let request = CreateVmRequest { ssh_public_key };
+    let body = serde_json::to_string(&request)?;
+
+    let response = make_request("POST", "/vms", Some(body))?;
     let vm: VmResponse = response.into_json()?;
 
     println!("Created VM:");
@@ -297,5 +334,24 @@ mod tests {
         assert_eq!(token, "test_token_12345");
         // Clean up
         env::remove_var("FCM_TOKEN");
+    }
+
+    #[test]
+    fn test_create_vm_request_serialization() {
+        let request = CreateVmRequest {
+            ssh_public_key: Some("ssh-ed25519 AAAAC3NzaC1... user@host".to_string()),
+        };
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(json.contains("ssh_public_key"));
+        assert!(json.contains("ssh-ed25519"));
+    }
+
+    #[test]
+    fn test_create_vm_request_without_key() {
+        let request = CreateVmRequest {
+            ssh_public_key: None,
+        };
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(json.contains("null"));
     }
 }

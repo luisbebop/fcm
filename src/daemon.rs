@@ -3,11 +3,17 @@
 use crate::network;
 use crate::vm::{self, VmConfig, VmState, VmError, BASE_DIR};
 use rand::Rng;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fs;
 use std::path::PathBuf;
 use tiny_http::{Header, Method, Request, Response, Server};
+
+/// Request to create a VM
+#[derive(Debug, Deserialize, Default)]
+struct CreateVmRequest {
+    ssh_public_key: Option<String>,
+}
 
 const BIND_ADDR: &str = "127.0.0.1:7777";
 
@@ -158,9 +164,20 @@ fn extract_vm_id(path: &str) -> Option<&str> {
 }
 
 /// Handle POST /vms - create a new VM
-fn handle_create_vm(request: Request) -> Result<(), Box<dyn Error>> {
+fn handle_create_vm(mut request: Request) -> Result<(), Box<dyn Error>> {
+    // Parse request body for SSH public key
+    let create_request: CreateVmRequest = {
+        let mut body = String::new();
+        request.as_reader().read_to_string(&mut body)?;
+        if body.is_empty() {
+            CreateVmRequest::default()
+        } else {
+            serde_json::from_str(&body).unwrap_or_default()
+        }
+    };
+
     // Always use random name and expose port 8000 by default
-    match vm::create_vm(None, Some(DEFAULT_EXPOSE_PORT)) {
+    match vm::create_vm(None, Some(DEFAULT_EXPOSE_PORT), create_request.ssh_public_key) {
         Ok(config) => {
             let response = VmResponse::from(&config);
             send_json_response(request, 201, &response)

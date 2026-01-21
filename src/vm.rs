@@ -235,18 +235,77 @@ impl From<caddy::CaddyError> for VmError {
     }
 }
 
+/// Inject an SSH public key into a rootfs image
+fn inject_ssh_key(rootfs_path: &Path, ssh_public_key: &str) -> Result<()> {
+    // Create a temporary mount point
+    let mount_point = rootfs_path.parent().unwrap().join("mnt");
+    fs::create_dir_all(&mount_point)?;
+
+    // Mount the rootfs image
+    let mount_output = Command::new("mount")
+        .args(["-o", "loop", rootfs_path.to_str().unwrap(), mount_point.to_str().unwrap()])
+        .output()?;
+
+    if !mount_output.status.success() {
+        let _ = fs::remove_dir(&mount_point);
+        return Err(VmError::Process(format!(
+            "Failed to mount rootfs: {}",
+            String::from_utf8_lossy(&mount_output.stderr)
+        )));
+    }
+
+    // Create /root/.ssh directory
+    let ssh_dir = mount_point.join("root/.ssh");
+    let result = (|| -> Result<()> {
+        fs::create_dir_all(&ssh_dir)?;
+
+        // Write authorized_keys
+        let auth_keys_path = ssh_dir.join("authorized_keys");
+        fs::write(&auth_keys_path, format!("{}\n", ssh_public_key))?;
+
+        // Set permissions: directory 700, file 600
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&ssh_dir, fs::Permissions::from_mode(0o700))?;
+            fs::set_permissions(&auth_keys_path, fs::Permissions::from_mode(0o600))?;
+        }
+
+        Ok(())
+    })();
+
+    // Always unmount, even if there was an error
+    let unmount_output = Command::new("umount")
+        .arg(mount_point.to_str().unwrap())
+        .output()?;
+
+    // Remove mount point directory
+    let _ = fs::remove_dir(&mount_point);
+
+    // Check unmount success
+    if !unmount_output.status.success() {
+        return Err(VmError::Process(format!(
+            "Failed to unmount rootfs: {}",
+            String::from_utf8_lossy(&unmount_output.stderr)
+        )));
+    }
+
+    result
+}
+
 /// Create a new VM
 ///
 /// This function:
 /// 1. Allocates an IP from the pool
 /// 2. Creates the VM directory
 /// 3. Copies the base rootfs (sparse copy)
-/// 4. Creates the tap device
-/// 5. Spawns the firecracker process
-/// 6. Configures firecracker via API
-/// 7. Starts the VM
-/// 8. If expose is set, configures Caddy
-pub fn create_vm(name: Option<String>, expose_port: Option<u16>) -> Result<VmConfig> {
+/// 4. Injects SSH public key if provided
+/// 5. Creates the tap device
+/// 6. Spawns the firecracker process
+/// 7. Configures firecracker via API
+/// 8. Starts the VM
+/// 9. If expose is set, configures Caddy
+pub fn create_vm(name: Option<String>, expose_port: Option<u16>, ssh_public_key: Option<String>) -> Result<VmConfig> {
     // Check that required files exist
     if !Path::new(KERNEL_PATH).exists() {
         return Err(VmError::ResourceNotAvailable(format!(
@@ -295,6 +354,14 @@ pub fn create_vm(name: Option<String>, expose_port: Option<u16>) -> Result<VmCon
             "Failed to copy rootfs: {}",
             String::from_utf8_lossy(&output.stderr)
         )));
+    }
+
+    // Inject SSH public key if provided
+    if let Some(ref key) = ssh_public_key {
+        if let Err(e) = inject_ssh_key(&rootfs_dest, key) {
+            let _ = fs::remove_dir_all(config.dir());
+            return Err(e);
+        }
     }
 
     // Create tap device
