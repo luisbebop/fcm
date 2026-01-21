@@ -23,14 +23,20 @@ mount -t devtmpfs devtmpfs /dev
 mkdir -p /dev/pts
 mount -t devpts devpts /dev/pts
 
-# Set hostname from kernel cmdline if available
-HOSTNAME=$(cat /proc/cmdline | tr ' ' '\n' | grep '^hostname=' | cut -d= -f2)
-if [ -n "$HOSTNAME" ]; then
-    hostname "$HOSTNAME"
-    echo "$HOSTNAME" > /etc/hostname
+# Parse hostname from ip= kernel parameter
+# Format: ip=<client-ip>:<server-ip>:<gw-ip>:<netmask>:<hostname>:<device>:<autoconf>
+# Example: ip=172.16.0.50::172.16.0.1:255.255.255.0:myvm:eth0:on
+IP_PARAM=$(cat /proc/cmdline | tr ' ' '\n' | grep '^ip=' | head -1)
+if [ -n "$IP_PARAM" ]; then
+    # Extract hostname (5th field, colon-separated)
+    HOSTNAME=$(echo "$IP_PARAM" | cut -d= -f2 | cut -d: -f5)
+    if [ -n "$HOSTNAME" ]; then
+        hostname "$HOSTNAME"
+        echo "$HOSTNAME" > /etc/hostname
+    fi
 fi
 
-# Network is pre-configured by kernel boot args (ip=<vm-ip>::172.16.0.1:255.255.255.0::eth0:on)
+# Network is pre-configured by kernel boot args (ip=<vm-ip>::172.16.0.1:255.255.255.0:<name>:eth0:on)
 # Just ensure the interface is up
 ip link set eth0 up 2>/dev/null || true
 
