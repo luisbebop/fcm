@@ -1,0 +1,72 @@
+#!/bin/bash
+#
+# Minimal init script for Firecracker VMs
+# Network is configured by kernel via boot args (ip= parameter)
+#
+
+set -e
+
+# Mount essential filesystems
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev
+
+# Create required device nodes if missing
+[ -e /dev/null ] || mknod -m 666 /dev/null c 1 3
+[ -e /dev/zero ] || mknod -m 666 /dev/zero c 1 5
+[ -e /dev/random ] || mknod -m 444 /dev/random c 1 8
+[ -e /dev/urandom ] || mknod -m 444 /dev/urandom c 1 9
+[ -e /dev/tty ] || mknod -m 666 /dev/tty c 5 0
+[ -e /dev/console ] || mknod -m 600 /dev/console c 5 1
+
+# Create pts mount point
+mkdir -p /dev/pts
+mount -t devpts devpts /dev/pts
+
+# Set hostname from kernel cmdline if available
+HOSTNAME=$(cat /proc/cmdline | tr ' ' '\n' | grep '^hostname=' | cut -d= -f2)
+if [ -n "$HOSTNAME" ]; then
+    hostname "$HOSTNAME"
+    echo "$HOSTNAME" > /etc/hostname
+fi
+
+# Network is pre-configured by kernel boot args (ip=<vm-ip>::172.16.0.1:255.255.255.0::eth0:on)
+# Just ensure the interface is up
+ip link set eth0 up 2>/dev/null || true
+
+# Set up DNS
+echo "nameserver 8.8.8.8" > /etc/resolv.conf
+echo "nameserver 8.8.4.4" >> /etc/resolv.conf
+
+# Create necessary directories
+mkdir -p /run/sshd
+mkdir -p /var/log
+
+# Start sshd
+/usr/sbin/sshd -E /var/log/sshd.log
+
+echo "============================================"
+echo "  fcm VM started"
+echo "  IP: $(ip -4 addr show eth0 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' || echo 'not configured')"
+echo "  SSH: root:root"
+echo "============================================"
+
+# Start a simple HTTP server on port 8000 as a placeholder
+# This provides a default service that can be proxied via Caddy
+cd /root
+cat > /root/index.html <<'HTMLEOF'
+<!DOCTYPE html>
+<html>
+<head><title>fcm VM</title></head>
+<body>
+<h1>fcm VM is running</h1>
+<p>Replace this with your application.</p>
+</body>
+</html>
+HTMLEOF
+
+# Use python's built-in HTTP server
+python3 -m http.server 8000 &
+
+# Keep the init process running
+exec /bin/bash --login
