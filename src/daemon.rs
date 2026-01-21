@@ -1,6 +1,6 @@
 // Daemon HTTP server module
 
-use crate::vm::{self, VmConfig, VmState, BASE_DIR};
+use crate::vm::{self, VmConfig, VmState, VmError, BASE_DIR};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
@@ -177,30 +177,23 @@ fn handle_create_vm(mut request: Request) -> Result<(), Box<dyn Error>> {
         Err(e) => return send_error(request, 400, &e),
     };
 
-    // For now, we'll use a placeholder IP - network module will allocate real IPs
-    let ip = "172.16.0.50".to_string();
-
-    let expose_config = create_req.expose.map(|port| vm::ExposeConfig {
-        port,
-        domain: format!(
-            "{}.64-34-93-45.sslip.io",
-            create_req.name.as_deref().unwrap_or("vm")
-        ),
-    });
-
-    let config = VmConfig::new(create_req.name, ip, expose_config);
-
-    // Create VM directory
-    fs::create_dir_all(config.dir())?;
-
-    // Save config
-    config.save()?;
-
-    // TODO: Actually create the VM (copy rootfs, setup network, start firecracker)
-    // This will be implemented in the vm module
-
-    let response = VmResponse::from(&config);
-    send_json_response(request, 201, &response)
+    // Use the VM lifecycle function to create the VM
+    match vm::create_vm(create_req.name, create_req.expose) {
+        Ok(config) => {
+            let response = VmResponse::from(&config);
+            send_json_response(request, 201, &response)
+        }
+        Err(e) => {
+            let status = match &e {
+                VmError::ResourceNotAvailable(_) => 503,
+                VmError::Network(_) => 500,
+                VmError::Firecracker(_) => 500,
+                VmError::Process(_) => 500,
+                _ => 500,
+            };
+            send_error(request, status, &e.to_string())
+        }
+    }
 }
 
 /// Handle GET /vms - list all VMs
@@ -238,52 +231,54 @@ fn handle_ssh_info(request: Request, vm_id: &str) -> Result<(), Box<dyn Error>> 
 
 /// Handle POST /vms/{id}/stop - stop a VM
 fn handle_stop_vm(request: Request, vm_id: &str) -> Result<(), Box<dyn Error>> {
-    match vm::find_vm(vm_id) {
-        Ok(mut config) => {
-            if config.state == VmState::Stopped {
-                return send_error(request, 400, "VM is already stopped");
-            }
-            config.state = VmState::Stopped;
-            config.save()?;
-            // TODO: Actually stop the firecracker process
+    match vm::stop_vm(vm_id) {
+        Ok(config) => {
             let response = VmResponse::from(&config);
             send_json_response(request, 200, &response)
         }
-        Err(_) => send_error(request, 404, &format!("VM '{}' not found", vm_id)),
+        Err(e) => {
+            let status = match &e {
+                VmError::NotFound(_) => 404,
+                VmError::InvalidState(_) => 400,
+                _ => 500,
+            };
+            send_error(request, status, &e.to_string())
+        }
     }
 }
 
 /// Handle POST /vms/{id}/start - start a stopped VM
 fn handle_start_vm(request: Request, vm_id: &str) -> Result<(), Box<dyn Error>> {
-    match vm::find_vm(vm_id) {
-        Ok(mut config) => {
-            if config.state == VmState::Running {
-                return send_error(request, 400, "VM is already running");
-            }
-            config.state = VmState::Running;
-            config.save()?;
-            // TODO: Actually start the firecracker process
+    match vm::start_vm(vm_id) {
+        Ok(config) => {
             let response = VmResponse::from(&config);
             send_json_response(request, 200, &response)
         }
-        Err(_) => send_error(request, 404, &format!("VM '{}' not found", vm_id)),
+        Err(e) => {
+            let status = match &e {
+                VmError::NotFound(_) => 404,
+                VmError::InvalidState(_) => 400,
+                VmError::ResourceNotAvailable(_) => 503,
+                _ => 500,
+            };
+            send_error(request, status, &e.to_string())
+        }
     }
 }
 
 /// Handle DELETE /vms/{id} - destroy a VM
 fn handle_destroy_vm(request: Request, vm_id: &str) -> Result<(), Box<dyn Error>> {
-    match vm::find_vm(vm_id) {
-        Ok(config) => {
-            // TODO: Stop firecracker process if running
-            // TODO: Remove tap device
-            // TODO: Remove from caddy config
-
-            // Remove VM directory
-            fs::remove_dir_all(config.dir())?;
-
+    match vm::destroy_vm(vm_id) {
+        Ok(()) => {
             send_json_response(request, 200, &serde_json::json!({"deleted": true}))
         }
-        Err(_) => send_error(request, 404, &format!("VM '{}' not found", vm_id)),
+        Err(e) => {
+            let status = match &e {
+                VmError::NotFound(_) => 404,
+                _ => 500,
+            };
+            send_error(request, status, &e.to_string())
+        }
     }
 }
 
