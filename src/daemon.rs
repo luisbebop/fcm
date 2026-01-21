@@ -15,7 +15,7 @@ struct CreateVmRequest {
     ssh_public_key: Option<String>,
 }
 
-const BIND_ADDR: &str = "127.0.0.1:7777";
+const BIND_ADDR: &str = "0.0.0.0:7777";
 
 /// Default port to expose for all VMs
 const DEFAULT_EXPOSE_PORT: u16 = 8000;
