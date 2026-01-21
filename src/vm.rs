@@ -270,18 +270,20 @@ pub fn create_vm(name: Option<String>, expose_port: Option<u16>) -> Result<VmCon
     // Allocate IP
     let ip = network::allocate_ip()?;
 
+    // Generate name first (needed for domain)
+    let vm_name = name.unwrap_or_else(random_name);
+
     // Create VM config
     let expose_config = if let Some(port) = expose_port {
         // Get server public IP for sslip.io domain
         let server_ip = caddy::get_server_ip()?;
-        let vm_name = name.clone().unwrap_or_else(|| "vm".to_string());
         let domain = caddy::generate_domain(&vm_name, &server_ip);
         Some(ExposeConfig { port, domain })
     } else {
         None
     };
 
-    let config = VmConfig::new(name, ip.clone(), expose_config);
+    let config = VmConfig::new(Some(vm_name), ip.clone(), expose_config);
 
     // Create VM directory
     fs::create_dir_all(config.dir())?;
