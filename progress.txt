@@ -248,5 +248,19 @@
 - All 69 tests pass
 - Commit: c090b6c
 
+### Task 14: Simplify fcm create with Better Defaults
+- Removed --name CLI option - VMs now always get a random name (e.g., "cosmic-nova")
+- Removed --expose CLI option - port 8000 is now always exposed by default
+- Updated main.rs: simplified Create command with no arguments
+- Updated client.rs: removed CreateVmRequest struct, simplified create_vm() function
+- Updated daemon.rs: added DEFAULT_EXPOSE_PORT constant (8000), simplified handle_create_vm()
+- Removed parse_json_body() function (no longer needed)
+- Removed tests for CreateVmRequest serialization/deserialization
+- Added test for DEFAULT_EXPOSE_PORT constant
+- User experience is now simpler: just run `fcm create` with no options
+- Random name is automatically used for the sslip.io domain
+- All 66 tests pass
+- Commit: 0c71ca5
+
 ## Next Tasks
 - None remaining - core implementation complete
