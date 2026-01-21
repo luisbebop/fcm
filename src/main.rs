@@ -5,6 +5,7 @@ mod client;
 mod daemon;
 mod firecracker;
 mod network;
+mod session;
 mod vm;
 
 #[derive(Parser)]
