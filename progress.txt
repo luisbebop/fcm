@@ -297,5 +297,24 @@
 - All 59 tests pass with zero clippy warnings
 - Commit: 733b018
 
+### Task 17: SSH Public Key Injection for Passwordless VM Access
+- Users with SSH keys can now SSH into VMs without entering a password
+- client.rs:
+  - Added find_ssh_public_key() to read user's SSH public key from ~/.ssh/
+  - Tries id_ed25519.pub, id_ecdsa.pub, id_rsa.pub in order of preference
+  - Sends key in CreateVmRequest JSON body when creating a VM
+  - Shows warning if no SSH key found (password auth still works)
+- daemon.rs:
+  - Added CreateVmRequest struct with ssh_public_key field
+  - Parses request body in handle_create_vm() and passes key to vm::create_vm()
+- vm.rs:
+  - Added inject_ssh_key() function that mounts rootfs and writes authorized_keys
+  - Creates /root/.ssh directory with 700 permissions
+  - Writes key to /root/.ssh/authorized_keys with 600 permissions
+  - Updated create_vm() signature to accept optional ssh_public_key
+  - Injects key after copying rootfs, before creating tap device
+- All 61 tests pass with zero warnings
+- Commit: 958aaa8
+
 ## Next Tasks
 - None remaining - core implementation complete
