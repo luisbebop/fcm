@@ -56,14 +56,6 @@ pub struct Action {
     pub action_type: ActionType,
 }
 
-/// Instance info response
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InstanceInfo {
-    pub id: String,
-    pub state: String,
-    pub vmm_version: String,
-}
-
 /// API error response
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiError {
@@ -212,24 +204,6 @@ impl FirecrackerClient {
         }
     }
 
-    /// GET request returning JSON
-    fn get<T: for<'de> Deserialize<'de>>(&self, path: &str) -> Result<T> {
-        let (status, body) = self.request("GET", path, None)?;
-
-        if status >= 200 && status < 300 {
-            Ok(serde_json::from_str(&body)?)
-        } else {
-            let msg = if body.is_empty() {
-                "Unknown error".to_string()
-            } else if let Ok(err) = serde_json::from_str::<ApiError>(&body) {
-                err.fault_message
-            } else {
-                body
-            };
-            Err(FirecrackerError::Api(status, msg))
-        }
-    }
-
     /// Configure boot source (kernel and boot args)
     pub fn set_boot_source(&self, boot_source: &BootSource) -> Result<()> {
         self.put("/boot-source", boot_source)
@@ -266,11 +240,6 @@ impl FirecrackerClient {
             action_type: ActionType::SendCtrlAltDel,
         };
         self.put("/actions", &action)
-    }
-
-    /// Get instance info
-    pub fn get_instance_info(&self) -> Result<InstanceInfo> {
-        self.get("/")
     }
 
     /// Check if the socket is accessible
@@ -447,14 +416,6 @@ mod tests {
         let json = r#"{"fault_message": "Invalid request"}"#;
         let err: ApiError = serde_json::from_str(json).unwrap();
         assert_eq!(err.fault_message, "Invalid request");
-    }
-
-    #[test]
-    fn test_instance_info_deserialization() {
-        let json = r#"{"id": "anonymous", "state": "Running", "vmm_version": "1.0.0"}"#;
-        let info: InstanceInfo = serde_json::from_str(json).unwrap();
-        assert_eq!(info.id, "anonymous");
-        assert_eq!(info.state, "Running");
     }
 
     #[test]

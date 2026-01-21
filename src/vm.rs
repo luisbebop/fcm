@@ -111,12 +111,6 @@ impl VmConfig {
         serde_json::from_str(&json)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
-
-    /// Load config by VM ID
-    pub fn load_by_id(id: &str) -> io::Result<Self> {
-        let vm_dir = PathBuf::from(BASE_DIR).join(id);
-        Self::load(&vm_dir)
-    }
 }
 
 /// Generate a random 8-character alphanumeric ID
@@ -617,34 +611,6 @@ fn cleanup_failed_vm(config: &VmConfig) {
     kill_firecracker(config);
     let _ = network::delete_tap(&config.id);
     let _ = fs::remove_dir_all(config.dir());
-}
-
-/// Check if a VM's firecracker process is actually running
-pub fn is_vm_running(config: &VmConfig) -> bool {
-    let pid_path = config.pid_path();
-
-    if let Ok(pid_str) = fs::read_to_string(&pid_path) {
-        if let Ok(pid) = pid_str.trim().parse::<i32>() {
-            // Check if process exists
-            unsafe { libc::kill(pid, 0) == 0 }
-        } else {
-            false
-        }
-    } else {
-        false
-    }
-}
-
-/// Sync VM state with actual process state
-pub fn sync_vm_state(config: &mut VmConfig) -> Result<()> {
-    let actually_running = is_vm_running(config);
-
-    if config.state == VmState::Running && !actually_running {
-        config.state = VmState::Stopped;
-        config.save()?;
-    }
-
-    Ok(())
 }
 
 #[cfg(test)]

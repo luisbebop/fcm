@@ -19,8 +19,6 @@ pub enum CaddyError {
     Command(String),
     /// Failed to get server IP
     NoServerIp,
-    /// Caddyfile parse error
-    ParseError(String),
 }
 
 impl std::fmt::Display for CaddyError {
@@ -29,7 +27,6 @@ impl std::fmt::Display for CaddyError {
             CaddyError::Io(e) => write!(f, "IO error: {}", e),
             CaddyError::Command(msg) => write!(f, "Command failed: {}", msg),
             CaddyError::NoServerIp => write!(f, "Failed to determine server public IP"),
-            CaddyError::ParseError(msg) => write!(f, "Caddyfile parse error: {}", msg),
         }
     }
 }
@@ -236,43 +233,6 @@ pub fn reload() -> Result<()> {
     Err(CaddyError::Command("Failed to reload Caddy".to_string()))
 }
 
-/// Check if Caddy is running
-pub fn is_running() -> bool {
-    Command::new("systemctl")
-        .args(["is-active", "--quiet", "caddy"])
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-}
-
-/// Validate Caddyfile syntax
-pub fn validate() -> Result<()> {
-    validate_file(CADDYFILE_PATH)
-}
-
-/// Validate a specific Caddyfile (for testing)
-pub fn validate_file(caddyfile_path: &str) -> Result<()> {
-    let output = Command::new("caddy")
-        .args(["validate", "--config", caddyfile_path])
-        .output();
-
-    match output {
-        Ok(output) if output.status.success() => Ok(()),
-        Ok(output) => {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            Err(CaddyError::ParseError(stderr.trim().to_string()))
-        }
-        Err(e) => {
-            // If caddy command not found, skip validation
-            if e.kind() == io::ErrorKind::NotFound {
-                Ok(())
-            } else {
-                Err(CaddyError::Io(e))
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -436,9 +396,6 @@ other.com {
 
         let err = CaddyError::Command("test error".to_string());
         assert!(err.to_string().contains("test error"));
-
-        let err = CaddyError::ParseError("invalid syntax".to_string());
-        assert!(err.to_string().contains("invalid syntax"));
     }
 
     #[test]

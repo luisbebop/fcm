@@ -10,12 +10,6 @@ use crate::vm::list_vms;
 /// Network gateway IP
 pub const GATEWAY: &str = "172.16.0.1";
 
-/// Subnet mask for VMs
-pub const SUBNET_MASK: &str = "255.255.255.0";
-
-/// CIDR notation for the subnet
-pub const SUBNET_CIDR: &str = "172.16.0.0/24";
-
 /// First IP in the allocation range
 const IP_RANGE_START: u8 = 50;
 
@@ -34,8 +28,6 @@ pub enum NetworkError {
     Io(io::Error),
     /// No IPs available in the pool
     NoAvailableIp,
-    /// Invalid IP address
-    InvalidIp(String),
 }
 
 impl std::fmt::Display for NetworkError {
@@ -44,7 +36,6 @@ impl std::fmt::Display for NetworkError {
             NetworkError::Command(msg) => write!(f, "Command failed: {}", msg),
             NetworkError::Io(e) => write!(f, "IO error: {}", e),
             NetworkError::NoAvailableIp => write!(f, "No available IP addresses in pool"),
-            NetworkError::InvalidIp(ip) => write!(f, "Invalid IP address: {}", ip),
         }
     }
 }
@@ -248,21 +239,6 @@ table ip fcm {
     Ok(())
 }
 
-/// Cleanup network (called on daemon shutdown)
-pub fn cleanup_network() -> Result<()> {
-    // Delete the nftables table
-    let _ = Command::new("nft")
-        .args(["delete", "table", "ip", "fcm"])
-        .output();
-
-    // Delete the bridge
-    let _ = Command::new("ip")
-        .args(["link", "delete", "fcm0"])
-        .output();
-
-    Ok(())
-}
-
 /// Allocate an IP address from the pool
 pub fn allocate_ip() -> Result<String> {
     let used_ips = get_used_ips()?;
@@ -283,28 +259,6 @@ fn get_used_ips() -> Result<HashSet<String>> {
     Ok(vms.into_iter().map(|vm| vm.ip).collect())
 }
 
-/// Parse the last octet from an IP address
-pub fn parse_last_octet(ip: &str) -> Result<u8> {
-    let parts: Vec<&str> = ip.split('.').collect();
-    if parts.len() != 4 {
-        return Err(NetworkError::InvalidIp(ip.to_string()));
-    }
-    parts[3]
-        .parse()
-        .map_err(|_| NetworkError::InvalidIp(ip.to_string()))
-}
-
-/// Check if an IP is in the valid range
-pub fn is_valid_vm_ip(ip: &str) -> bool {
-    if !ip.starts_with("172.16.0.") {
-        return false;
-    }
-    match parse_last_octet(ip) {
-        Ok(octet) => octet >= IP_RANGE_START && octet <= IP_RANGE_END,
-        Err(_) => false,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -323,59 +277,14 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_last_octet() {
-        assert_eq!(parse_last_octet("172.16.0.50").unwrap(), 50);
-        assert_eq!(parse_last_octet("172.16.0.254").unwrap(), 254);
-        assert_eq!(parse_last_octet("10.0.0.1").unwrap(), 1);
-    }
-
-    #[test]
-    fn test_parse_last_octet_invalid() {
-        assert!(parse_last_octet("invalid").is_err());
-        assert!(parse_last_octet("172.16.0").is_err());
-        assert!(parse_last_octet("172.16.0.abc").is_err());
-    }
-
-    #[test]
-    fn test_is_valid_vm_ip() {
-        assert!(is_valid_vm_ip("172.16.0.50"));
-        assert!(is_valid_vm_ip("172.16.0.100"));
-        assert!(is_valid_vm_ip("172.16.0.254"));
-    }
-
-    #[test]
-    fn test_is_valid_vm_ip_out_of_range() {
-        // Below range
-        assert!(!is_valid_vm_ip("172.16.0.49"));
-        assert!(!is_valid_vm_ip("172.16.0.1"));
-        // Wrong subnet
-        assert!(!is_valid_vm_ip("10.0.0.50"));
-        assert!(!is_valid_vm_ip("172.16.1.50"));
-    }
-
-    #[test]
-    fn test_is_valid_vm_ip_invalid() {
-        assert!(!is_valid_vm_ip("invalid"));
-        assert!(!is_valid_vm_ip("172.16.0"));
-    }
-
-    #[test]
     fn test_gateway_constant() {
         assert_eq!(GATEWAY, "172.16.0.1");
-    }
-
-    #[test]
-    fn test_subnet_mask_constant() {
-        assert_eq!(SUBNET_MASK, "255.255.255.0");
     }
 
     #[test]
     fn test_network_error_display() {
         let err = NetworkError::NoAvailableIp;
         assert!(err.to_string().contains("No available IP"));
-
-        let err = NetworkError::InvalidIp("bad".to_string());
-        assert!(err.to_string().contains("bad"));
 
         let err = NetworkError::Command("test error".to_string());
         assert!(err.to_string().contains("test error"));
