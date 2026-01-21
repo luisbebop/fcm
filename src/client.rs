@@ -7,7 +7,20 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
-const DAEMON_URL: &str = "http://127.0.0.1:7777";
+const DEFAULT_DAEMON_URL: &str = "http://127.0.0.1:7777";
+
+/// Get the daemon URL from FCM_HOST env var or use default
+fn daemon_url() -> String {
+    if let Ok(host) = env::var("FCM_HOST") {
+        if host.starts_with("http://") || host.starts_with("https://") {
+            host
+        } else {
+            format!("http://{}", host)
+        }
+    } else {
+        DEFAULT_DAEMON_URL.to_string()
+    }
+}
 
 /// Request to create a VM with SSH public key
 #[derive(Debug, Serialize)]
@@ -81,7 +94,7 @@ fn make_request(
     body: Option<String>,
 ) -> Result<ureq::Response, Box<dyn Error>> {
     let token = load_token()?;
-    let url = format!("{}{}", DAEMON_URL, path);
+    let url = format!("{}{}", daemon_url(), path);
 
     let request = match method {
         "GET" => ureq::get(&url),
@@ -353,5 +366,25 @@ mod tests {
         };
         let json = serde_json::to_string(&request).unwrap();
         assert!(json.contains("null"));
+    }
+
+    #[test]
+    fn test_daemon_url_default() {
+        env::remove_var("FCM_HOST");
+        assert_eq!(daemon_url(), "http://127.0.0.1:7777");
+    }
+
+    #[test]
+    fn test_daemon_url_from_env() {
+        env::set_var("FCM_HOST", "192.168.1.100:7777");
+        assert_eq!(daemon_url(), "http://192.168.1.100:7777");
+        env::remove_var("FCM_HOST");
+    }
+
+    #[test]
+    fn test_daemon_url_with_scheme() {
+        env::set_var("FCM_HOST", "https://myserver.example.com:7777");
+        assert_eq!(daemon_url(), "https://myserver.example.com:7777");
+        env::remove_var("FCM_HOST");
     }
 }
