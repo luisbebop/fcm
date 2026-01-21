@@ -349,5 +349,36 @@
 - All 68 tests pass with zero warnings
 - Commit: a28be91
 
+### Task 21: Session Management Module (session.rs)
+- Created session.rs module for persistent console session management
+- SessionError enum with Display impl for error handling:
+  - NotFound, VmNotAvailable, SshError, TmuxError, Io variants
+- SessionInfo struct for session metadata:
+  - id: unique 6-char session ID
+  - vm_id: VM the session belongs to
+  - tmux_session: tmux session name (fcm-<id>)
+  - created_at: creation timestamp
+  - is_default: whether this is the default session for the VM
+- SessionManager struct with thread-safe session tracking:
+  - create_session(): creates tmux session on VM via SSH
+  - get_session(): retrieves session info by ID
+  - list_sessions(): lists all sessions for a VM
+  - kill_session(): terminates tmux session on VM
+  - remove_vm_sessions(): removes all sessions when VM is stopped/destroyed
+  - sync_sessions(): syncs with actual tmux state on VM
+- Helper functions:
+  - generate_session_id(): generates 6-char alphanumeric IDs
+  - create_tmux_session(): creates tmux session via SSH
+  - list_tmux_sessions(): lists tmux sessions via SSH
+  - kill_tmux_session(): kills tmux session via SSH
+  - attach_to_session(): spawns SSH process attached to tmux session
+- Added session module to main.rs
+- 13 unit tests for session management functionality
+- All 79 tests pass (single-threaded; 2 pre-existing test isolation issues with parallel env vars)
+- Commit: b9eb527
+
 ## Next Tasks
-- None remaining - core implementation complete
+- Task 22: Wire session endpoints to daemon (POST/GET/DELETE /vms/{id}/sessions)
+- Task 23: Console streaming module (console.rs) for terminal client
+- Task 24: Terminal server on port 7778 in daemon
+- Task 25: Update CLI with console/sessions/attach commands
