@@ -264,5 +264,30 @@
 - Fix: Domain now correctly uses VM name (e.g., nebula-tensor.64-34-93-45.sslip.io)
 - Commit: 02a883b
 
+### Task 15: Remove Unused Code to Eliminate Compiler Warnings
+- Removed dead code across multiple modules to eliminate all 15 compiler warnings
+- caddy.rs:
+  - Removed ParseError variant from CaddyError enum
+  - Removed is_running() function
+  - Removed validate() and validate_file() functions
+  - Updated test_caddy_error_display test
+- firecracker.rs:
+  - Removed InstanceInfo struct
+  - Removed get() method
+  - Removed get_instance_info() method
+  - Removed test_instance_info_deserialization test
+- network.rs:
+  - Removed SUBNET_MASK and SUBNET_CIDR constants
+  - Removed InvalidIp variant from NetworkError enum
+  - Removed cleanup_network() function
+  - Removed parse_last_octet() and is_valid_vm_ip() functions
+  - Removed associated tests for deleted code
+- vm.rs:
+  - Removed load_by_id() method from VmConfig
+  - Removed is_vm_running() function
+  - Removed sync_vm_state() function
+- All 59 tests pass with zero warnings
+- Commit: c9bf4ad
+
 ## Next Tasks
 - None remaining - core implementation complete
