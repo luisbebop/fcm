@@ -66,7 +66,9 @@ do_start() {
     cd "$APP_DIR"
 
     # Start the process in background with PORT environment variable
+    # Set PATH to include pip-installed binaries
     export PORT
+    export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
     nohup sh -c "$cmd" >> "$LOG_FILE" 2>&1 &
     local pid=$!
 
