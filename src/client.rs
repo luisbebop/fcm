@@ -162,6 +162,44 @@ fn find_ssh_public_key() -> Option<String> {
     None
 }
 
+/// ANSI color codes
+const YELLOW: &str = "\x1b[33m";
+const GREEN: &str = "\x1b[32m";
+const BRIGHT_YELLOW: &str = "\x1b[93m";
+const BRIGHT_GREEN: &str = "\x1b[92m";
+const ORANGE: &str = "\x1b[38;5;208m";
+const GRAY: &str = "\x1b[90m";
+const WHITE: &str = "\x1b[97m";
+const RESET: &str = "\x1b[0m";
+const BOLD: &str = "\x1b[1m";
+
+/// Print the cockatiel ASCII art
+fn print_cockatiel() {
+    println!(
+        r#"
+{by}        ▄▄▄{y}██{by}▄▄        {reset}
+{by}      ▄{o}█{by}███{y}█{o}▓{y}██▄      {reset}
+{by}     █{o}▓▓{by}██{y}█{o}▓▓▓{y}██     {reset}
+{y}    ▐{o}▓▓▓{y}██{o}▓▓▓▓{y}█▌    {reset}
+{y}    █{o}▓▓▓▓▓▓{w}◉{o}▓{y}██     {reset}
+{y}   ▐█{o}▓▓▓▓▓▓▓{y}█{g}▄      {reset}
+{y}   ██{o}▓▓▓▓▓{y}█{bg}▀{g}▀▀{bg}▄     {reset}
+{g}    {y}▀██{o}▓{y}██{bg}▀{g}▄▄▄{bg}▀▀▄   {reset}
+{g}      ▀{y}█{g}▌  {bg}▀▀▀▀▀▀▀  {reset}
+{g}       █▌           {reset}
+{g}      ▐█            {reset}
+{g}      █▌            {reset}
+"#,
+        by = BRIGHT_YELLOW,
+        y = YELLOW,
+        o = ORANGE,
+        g = GREEN,
+        bg = BRIGHT_GREEN,
+        w = WHITE,
+        reset = RESET
+    );
+}
+
 /// Create a new VM
 pub fn create_vm() -> Result<(), Box<dyn Error>> {
     let ssh_public_key = find_ssh_public_key();
@@ -175,8 +213,67 @@ pub fn create_vm() -> Result<(), Box<dyn Error>> {
     let response = make_request("POST", "/vms", Some(body))?;
     let vm: VmResponse = response.into_json()?;
 
-    println!("Created VM:");
-    print_vm(&vm);
+    // Print cockatiel ASCII art
+    print_cockatiel();
+
+    // Print VM info
+    println!(
+        "{bold}{green}  VM created: {yellow}{}{reset}",
+        vm.name,
+        bold = BOLD,
+        green = GREEN,
+        yellow = YELLOW,
+        reset = RESET
+    );
+    println!();
+
+    if let Some(expose) = &vm.expose {
+        println!(
+            "{gray}  URL:{reset}  {green}https://{}{reset}",
+            expose.domain,
+            gray = GRAY,
+            green = GREEN,
+            reset = RESET
+        );
+    }
+
+    if let Some(git_url) = &vm.git_url {
+        println!(
+            "{gray}  Git:{reset}  {yellow}{}{reset}",
+            git_url,
+            gray = GRAY,
+            yellow = YELLOW,
+            reset = RESET
+        );
+    }
+
+    println!();
+    println!("{bold}  Quick Start:{reset}", bold = BOLD, reset = RESET);
+    println!();
+    println!("{gray}  # Add the remote to your project{reset}", gray = GRAY, reset = RESET);
+    if let Some(git_url) = &vm.git_url {
+        println!(
+            "  {green}git remote add fcm {}{reset}",
+            git_url,
+            green = GREEN,
+            reset = RESET
+        );
+    }
+    println!();
+    println!("{gray}  # Create a simple Procfile{reset}", gray = GRAY, reset = RESET);
+    println!(
+        "  {yellow}echo 'web: python3 -m http.server $PORT' > Procfile{reset}",
+        yellow = YELLOW,
+        reset = RESET
+    );
+    println!();
+    println!("{gray}  # Deploy!{reset}", gray = GRAY, reset = RESET);
+    println!(
+        "  {green}git add . && git commit -m 'deploy' && git push fcm main{reset}",
+        green = GREEN,
+        reset = RESET
+    );
+    println!();
 
     Ok(())
 }
