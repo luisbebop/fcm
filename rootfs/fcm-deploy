@@ -32,7 +32,14 @@ if [ -f "Gemfile" ]; then
     log "Detected Ruby (Gemfile)"
     if command -v bundle >/dev/null 2>&1; then
         log "Running bundle install..."
-        bundle install --without development test >> "$LOG" 2>&1 || log "Warning: bundle install had issues"
+        # Install gems locally to vendor/bundle for isolation
+        bundle config set --local path 'vendor/bundle'
+        bundle config set --local without 'development test'
+        if ! bundle install >> "$LOG" 2>&1; then
+            log "Warning: bundle install had issues"
+            # Show last few lines of log for debugging
+            tail -5 "$LOG" | while read line; do log "  $line"; done
+        fi
     else
         error "bundler not found"
     fi

@@ -1,9 +1,10 @@
 FROM alpine:edge
 
 RUN apk add --no-cache \
-    dropbear dropbear-scp ruby ruby-bundler python3 py3-pip \
+    dropbear dropbear-scp ruby ruby-bundler ruby-dev python3 py3-pip \
     tmux curl bash iproute2 rng-tools \
-    nodejs npm git
+    nodejs npm git \
+    build-base libffi-dev yaml-dev zlib-dev openssl-dev
 
 # Configure dropbear SSH and set root password
 RUN mkdir -p /etc/dropbear && \
