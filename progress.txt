@@ -870,5 +870,20 @@
 - All 94 tests pass with zero warnings
 - Commit: ad75f97
 
+### Task 52: Increase Default VM Resources for Rails Deployment
+- Fixed out-of-memory errors during Ruby gem compilation (bigdecimal, etc.)
+- src/vm.rs:
+  - Increased DEFAULT_MEM_SIZE_MIB from 512 to 1024
+  - Updated test to match new default
+- rootfs/build.sh:
+  - Increased IMAGE_SIZE_MB from 1024 to 2048 (2GB disk)
+  - Rails apps with bundled gems need more disk space
+- rootfs/init:
+  - Added automatic 512MB swap file creation on boot
+  - Helps with memory-intensive operations like gem compilation
+- New VMs now have: 1024MB RAM, 2GB disk, 512MB swap
+- All 94 tests pass with zero warnings
+- Commit: 2d40f52
+
 ## Next Tasks
 - None - all PRD features implemented
