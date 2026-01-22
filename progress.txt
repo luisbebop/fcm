@@ -395,7 +395,36 @@
 - All 80 tests pass with zero warnings
 - Commit: 48a3093
 
+### Task 23: Console Streaming Client Module (console.rs)
+- Created console.rs module for client-side terminal streaming
+- ConsoleError enum with variants: ConnectionFailed, AuthFailed, Io, TerminalError, SessionError
+- ConnectRequest struct for authentication protocol:
+  - vm: VM ID or name
+  - session: session ID to connect to
+  - token: auth token for daemon
+- ConnectResponse struct for daemon response (success/error)
+- terminal_host() function to extract hostname from FCM_HOST env var
+- load_token() function to load auth token (FCM_TOKEN env or ~/.fcm-token)
+- RawTerminal struct for terminal mode handling:
+  - enable() puts terminal in raw mode using libc termios
+  - restore() restores original terminal settings
+  - Implements Drop trait for automatic cleanup
+- is_tty() function to check if stdin is a terminal
+- connect() main function:
+  - Connects to daemon terminal server (port 7778)
+  - Sends JSON authentication message
+  - Reads response and validates success
+  - Enters raw terminal mode
+  - Spawns reader thread for socket->stdout proxying
+  - Main thread handles stdin->socket proxying
+  - Supports Ctrl+] (0x1d) to disconnect
+  - Proper cleanup and terminal restoration on exit
+- Added console module to main.rs
+- Added #[allow(dead_code)] annotations for items used in future tasks
+- 10 unit tests for serialization, deserialization, and helper functions
+- All 89 tests pass with zero warnings
+- Commit: 5d50657
+
 ## Next Tasks
-- Task 23: Console streaming module (console.rs) for terminal client
 - Task 24: Terminal server on port 7778 in daemon
 - Task 25: Update CLI with console/sessions/attach commands
