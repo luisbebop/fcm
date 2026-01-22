@@ -193,10 +193,10 @@ pub fn list_vms() -> Result<(), Box<dyn Error>> {
 
     // Print header
     println!(
-        "{:<12} {:<20} {:<16} {:<10} DOMAIN",
-        "ID", "NAME", "IP", "STATE"
+        "{:<12} {:<20} {:<16} {:<10} {:<36} GIT",
+        "ID", "NAME", "IP", "STATE", "DOMAIN"
     );
-    println!("{}", "-".repeat(80));
+    println!("{}", "-".repeat(120));
 
     // Print each VM
     for vm in vms {
@@ -205,9 +205,10 @@ pub fn list_vms() -> Result<(), Box<dyn Error>> {
             .as_ref()
             .map(|e| e.domain.as_str())
             .unwrap_or("-");
+        let git_url = vm.git_url.as_deref().unwrap_or("-");
         println!(
-            "{:<12} {:<20} {:<16} {:<10} {}",
-            vm.id, vm.name, vm.ip, vm.state, domain
+            "{:<12} {:<20} {:<16} {:<10} {:<36} {}",
+            vm.id, vm.name, vm.ip, vm.state, domain, git_url
         );
     }
 
