@@ -265,16 +265,14 @@ pub fn create_vm() -> Result<(), Box<dyn Error>> {
         );
     }
 
-    // Print a random koan
     let koan = random_koan();
-    println!();
-    println!("{d}  \"{}\"{reset}", koan, d = GRAY, reset = RESET);
     println!();
     println!("{bold}{w}  Quick Start:{reset}", bold = BOLD, w = WHITE, reset = RESET);
     println!();
     println!("{d}  # Initialize and deploy{reset}", d = GRAY, reset = RESET);
-    println!("  {w}mkdir my-app && cd my-app{reset}", w = WHITE, reset = RESET);
-    println!("  {w}git init && echo 'web: python3 -m http.server $PORT' > Procfile{reset}", w = WHITE, reset = RESET);
+    println!("  {w}mkdir my-app && cd my-app && git init{reset}", w = WHITE, reset = RESET);
+    println!("  {w}echo '<h1>{}</h1>' > index.html{reset}", koan, w = WHITE, reset = RESET);
+    println!("  {w}echo 'web: python3 -m http.server $PORT' > Procfile{reset}", w = WHITE, reset = RESET);
     if let Some(git_url) = &vm.git_url {
         println!("  {w}git remote add fcm {}{reset}", git_url, w = WHITE, reset = RESET);
     }
