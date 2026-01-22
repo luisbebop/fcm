@@ -454,5 +454,20 @@
 - All 93 tests pass with zero warnings
 - Commit: b1eaae8
 
+### Task 25: Update CLI with console/sessions/attach Commands
+- Added three new CLI commands in main.rs for persistent console sessions:
+  - `fcm console <vm>` - opens persistent console session (creates default session)
+  - `fcm sessions <vm>` - lists active sessions for a VM
+  - `fcm attach <vm> <session-id>` - reattaches to an existing session
+- Added client functions in client.rs:
+  - console_vm() - creates session via POST /vms/{id}/sessions, then connects via console::connect()
+  - list_sessions() - GET /vms/{id}/sessions with formatted table output
+  - attach_session() - connects to existing session via console::connect()
+- Added SessionResponse struct for deserializing session API responses
+- Added format_timestamp() helper for human-readable relative times (e.g., "5m ago", "2h ago")
+- Imported console module in client.rs for terminal streaming connection
+- All 93 tests pass with zero warnings
+- Commit: 2bdb7eb
+
 ## Next Tasks
-- Task 25: Update CLI with console/sessions/attach commands
+- Task 26: Remove #[allow(dead_code)] attributes from console.rs (code is now used)
