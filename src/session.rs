@@ -363,14 +363,20 @@ fn kill_tmux_session(vm_ip: &str, session_name: &str) -> Result<(), SessionError
 /// Spawn an SSH process that attaches to a tmux session
 /// Returns the child process for I/O proxying
 pub fn attach_to_session(vm_ip: &str, session_name: &str, cols: u16, rows: u16) -> Result<Child, SessionError> {
-    // First resize the tmux window to match client terminal, then attach
-    // This ensures the terminal size is correct from the start
-    let tmux_cmd = format!(
-        "tmux resize-window -t {} -x {} -y {} 2>/dev/null; \
-         tmux attach-session -t {}",
-        session_name, cols, rows, session_name
-    );
+    // First resize the tmux window to match client terminal size
+    let _ = Command::new("sshpass")
+        .args([
+            "-p", "root",
+            "ssh",
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "ConnectTimeout=5",
+            &format!("root@{}", vm_ip),
+            "tmux", "resize-window", "-t", session_name, "-x", &cols.to_string(), "-y", &rows.to_string(),
+        ])
+        .output();
 
+    // Now attach to the session
     let child = Command::new("sshpass")
         .args([
             "-p", "root",
@@ -380,7 +386,7 @@ pub fn attach_to_session(vm_ip: &str, session_name: &str, cols: u16, rows: u16) 
             "-o", "ConnectTimeout=5",
             "-t", "-t", // Force PTY allocation
             &format!("root@{}", vm_ip),
-            "sh", "-c", &tmux_cmd,
+            "tmux", "attach-session", "-t", session_name,
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
