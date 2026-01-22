@@ -967,5 +967,30 @@
 - All 97 tests pass with zero warnings
 - Commit: 9bb24b5
 
+### Task 60: Add Comprehensive README with Installation Guide
+- Created README.md with clear, simple documentation
+- Project overview explaining what fcm is (Heroku-style deploys on bare metal)
+- Quick start example showing VM creation and git push deployment
+- All CLI commands documented with usage examples
+- Complete bare metal installation guide for Ubuntu 22.04+:
+  - Rust and build tools
+  - Firecracker v1.7.0 installation
+  - Caddy installation for SSL
+  - sshpass and Docker setup
+  - Building fcm from source
+  - Kernel download
+  - Base rootfs image build
+  - Network configuration (IP forwarding)
+  - SSH environment setup for git push
+  - Daemon startup
+  - Client configuration with token
+- Architecture diagram showing VM -> Bridge -> Caddy -> Internet flow
+- Procfile documentation with auto-detection table
+- VM specs (1 vCPU, 1024MB RAM, 2GB disk, 512MB swap)
+- Environment variables (FCM_HOST, FCM_TOKEN)
+- Troubleshooting section for common issues
+- All 97 tests pass with zero warnings
+- Commit: 1dcdce4
+
 ## Next Tasks
 - None - all PRD features implemented
