@@ -281,9 +281,9 @@ pub fn create_vm() -> Result<(), Box<dyn Error>> {
     println!("  {w}echo '<h1>{}</h1>' > index.html{reset}", koan, w = WHITE, reset = RESET);
     println!("  {w}echo 'web: python3 -m http.server $PORT' > Procfile{reset}", w = WHITE, reset = RESET);
     if let Some(git_url) = &vm.git_url {
-        println!("  {w}git remote add fcm {}{reset}", git_url, w = WHITE, reset = RESET);
+        println!("  {w}git remote add origin {}{reset}", git_url, w = WHITE, reset = RESET);
     }
-    println!("  {w}git add -A && git commit -m 'init' && git push fcm main{reset}", w = WHITE, reset = RESET);
+    println!("  {w}git add -A && git commit -m 'init' && git push origin main{reset}", w = WHITE, reset = RESET);
     println!();
 
     Ok(())
