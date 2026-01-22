@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 
 mod caddy;
 mod client;
@@ -65,12 +65,10 @@ fn main() {
     match cli.command {
         None => {
             // No command given - check for .fcm file in current directory
-            if let Err(e) = client::show_local_vm() {
-                // No local config or error - show help
-                eprintln!("{}", e);
-                eprintln!();
-                eprintln!("Run 'fcm --help' for usage or 'fcm create' to create a new VM.");
-                std::process::exit(1);
+            if client::show_local_vm().is_err() {
+                // No local config - show help
+                let _ = Cli::command().print_help();
+                println!();
             }
         }
         Some(Commands::Create) => {
