@@ -628,5 +628,25 @@
 - Session state persists across disconnects
 - Commit: 7867c74
 
+### Task 35: Remove Redundant sessions/attach Commands
+- With single-session-per-VM model, sessions and attach commands became redundant
+- Users only need `fcm console <vm>` to connect/reconnect to persistent session
+- Removed from main.rs:
+  - Sessions and Attach CLI command variants
+  - Match arms for these commands
+- Removed from client.rs:
+  - list_sessions() and attach_session() functions
+  - format_timestamp() helper
+- Removed from daemon.rs:
+  - GET /vms/{id}/sessions endpoint and handle_list_sessions() handler
+  - DELETE /vms/{id}/sessions/{session-id} endpoint and handle_kill_session() handler
+- Removed from session.rs:
+  - list_sessions(), kill_session(), sync_sessions() methods
+  - kill_tmux_session() helper function
+  - test_session_manager_list_empty test
+- Simplified CLI: now only 7 commands (create, ls, console, stop, start, destroy, daemon)
+- All 88 tests pass with zero warnings
+- Commit: 9b35d3a
+
 ## Next Tasks
 - None - all PRD features implemented
