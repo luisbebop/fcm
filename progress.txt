@@ -941,5 +941,15 @@
 - All 97 tests pass with zero warnings
 - Commit: c9ccbda
 
+### Task 58: Prevent Duplicate VM Creation When .fcm Exists
+- Changed `fcm create` behavior when .fcm file already exists in current directory
+- Instead of creating a new VM, shows existing VM info (same as `fcm` without args)
+- Prevents accidentally creating multiple VMs for the same project
+- client.rs:
+  - Added check for local_config_path().exists() at start of create_vm()
+  - Returns show_local_vm() if .fcm file found
+- All 97 tests pass with zero warnings
+- Commit: b613efa
+
 ## Next Tasks
 - None - all PRD features implemented
