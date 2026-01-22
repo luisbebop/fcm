@@ -23,11 +23,6 @@ enum Commands {
     Create,
     /// List all VMs
     Ls,
-    /// SSH into a VM
-    Ssh {
-        /// VM name or ID
-        vm: String,
-    },
     /// Open persistent console session
     Console {
         /// VM name or ID
@@ -77,12 +72,6 @@ fn main() {
         Commands::Ls => {
             if let Err(e) = client::list_vms() {
                 eprintln!("Error listing VMs: {}", e);
-                std::process::exit(1);
-            }
-        }
-        Commands::Ssh { vm } => {
-            if let Err(e) = client::ssh_vm(&vm) {
-                eprintln!("Error connecting to VM: {}", e);
                 std::process::exit(1);
             }
         }

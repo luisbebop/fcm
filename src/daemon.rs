@@ -78,14 +78,6 @@ impl From<&VmConfig> for VmResponse {
     }
 }
 
-/// SSH info response
-#[derive(Debug, Serialize)]
-pub struct SshInfoResponse {
-    pub ip: String,
-    pub user: String,
-    pub port: u16,
-}
-
 /// Session response (for API responses)
 #[derive(Debug, Serialize)]
 pub struct SessionResponse {
@@ -250,21 +242,6 @@ fn handle_get_vm(request: Request, vm_id: &str) -> Result<(), Box<dyn Error>> {
     match vm::find_vm(vm_id) {
         Ok(config) => {
             let response = VmResponse::from(&config);
-            send_json_response(request, 200, &response)
-        }
-        Err(_) => send_error(request, 404, &format!("VM '{}' not found", vm_id)),
-    }
-}
-
-/// Handle GET /vms/{id}/ssh - get SSH connection info
-fn handle_ssh_info(request: Request, vm_id: &str) -> Result<(), Box<dyn Error>> {
-    match vm::find_vm(vm_id) {
-        Ok(config) => {
-            let response = SshInfoResponse {
-                ip: config.ip.clone(),
-                user: "root".to_string(),
-                port: 22,
-            };
             send_json_response(request, 200, &response)
         }
         Err(_) => send_error(request, 404, &format!("VM '{}' not found", vm_id)),
@@ -468,7 +445,6 @@ fn handle_request(
             let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
             match parts.as_slice() {
                 ["vms", vm_id] => handle_get_vm(request, vm_id),
-                ["vms", vm_id, "ssh"] => handle_ssh_info(request, vm_id),
                 ["vms", vm_id, "sessions"] => {
                     handle_list_sessions(request, vm_id, session_manager)
                 }

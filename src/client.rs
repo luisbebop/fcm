@@ -6,7 +6,6 @@ use std::env;
 use std::error::Error;
 use std::fs;
 use std::path::PathBuf;
-use std::process::Command;
 
 const DEFAULT_DAEMON_URL: &str = "http://127.0.0.1:7777";
 
@@ -21,31 +20,6 @@ fn daemon_url() -> String {
     } else {
         DEFAULT_DAEMON_URL.to_string()
     }
-}
-
-/// Check if we're connecting to a remote daemon and return the jump host if so
-fn get_jump_host() -> Option<String> {
-    let host = env::var("FCM_HOST").ok()?;
-
-    // Extract hostname from FCM_HOST (remove scheme and port)
-    let host = host
-        .trim_start_matches("http://")
-        .trim_start_matches("https://");
-
-    // Split off port if present
-    let hostname = host.split(':').next().unwrap_or(host);
-
-    // If it's localhost, no jump host needed
-    if hostname == "127.0.0.1" || hostname == "localhost" {
-        return None;
-    }
-
-    // Get current username for jump host
-    let user = env::var("USER")
-        .or_else(|_| env::var("USERNAME"))
-        .unwrap_or_else(|_| "root".to_string());
-
-    Some(format!("{}@{}", user, hostname))
 }
 
 /// Request to create a VM with SSH public key
@@ -69,14 +43,6 @@ struct VmResponse {
 struct ExposeResponse {
     port: u16,
     domain: String,
-}
-
-/// SSH info response
-#[derive(Debug, Deserialize)]
-struct SshInfoResponse {
-    ip: String,
-    user: String,
-    port: u16,
 }
 
 /// Error response from daemon
@@ -239,48 +205,6 @@ pub fn list_vms() -> Result<(), Box<dyn Error>> {
             "{:<12} {:<20} {:<16} {:<10} {}",
             vm.id, vm.name, vm.ip, vm.state, domain
         );
-    }
-
-    Ok(())
-}
-
-/// SSH into a VM
-pub fn ssh_vm(vm: &str) -> Result<(), Box<dyn Error>> {
-    let response = make_request("GET", &format!("/vms/{}/ssh", vm), None)?;
-    let ssh_info: SshInfoResponse = response.into_json()?;
-
-    // Check if we need to use a jump host for remote daemon
-    let jump_host = get_jump_host();
-
-    if let Some(ref jh) = jump_host {
-        println!(
-            "Connecting to {}@{} via {}...",
-            ssh_info.user, ssh_info.ip, jh
-        );
-    } else {
-        println!("Connecting to {}@{}...", ssh_info.user, ssh_info.ip);
-    }
-
-    // Execute ssh command
-    let mut cmd = Command::new("ssh");
-    cmd.arg("-o")
-        .arg("StrictHostKeyChecking=no")
-        .arg("-o")
-        .arg("UserKnownHostsFile=/dev/null");
-
-    // Add jump host if connecting to remote daemon
-    if let Some(jh) = jump_host {
-        cmd.arg("-J").arg(jh);
-    }
-
-    cmd.arg("-p")
-        .arg(ssh_info.port.to_string())
-        .arg(format!("{}@{}", ssh_info.user, ssh_info.ip));
-
-    let status = cmd.status()?;
-
-    if !status.success() {
-        return Err("SSH connection failed".into());
     }
 
     Ok(())
@@ -451,19 +375,6 @@ mod tests {
     }
 
     #[test]
-    fn test_ssh_info_deserialization() {
-        let json = r#"{
-            "ip": "172.16.0.50",
-            "user": "root",
-            "port": 22
-        }"#;
-        let info: SshInfoResponse = serde_json::from_str(json).unwrap();
-        assert_eq!(info.ip, "172.16.0.50");
-        assert_eq!(info.user, "root");
-        assert_eq!(info.port, 22);
-    }
-
-    #[test]
     fn test_error_response_deserialization() {
         let json = r#"{"error": "VM not found"}"#;
         let err: ErrorResponse = serde_json::from_str(json).unwrap();
@@ -516,41 +427,6 @@ mod tests {
     fn test_daemon_url_with_scheme() {
         env::set_var("FCM_HOST", "https://myserver.example.com:7777");
         assert_eq!(daemon_url(), "https://myserver.example.com:7777");
-        env::remove_var("FCM_HOST");
-    }
-
-    #[test]
-    fn test_get_jump_host_none_when_no_fcm_host() {
-        env::remove_var("FCM_HOST");
-        assert!(get_jump_host().is_none());
-    }
-
-    #[test]
-    fn test_get_jump_host_none_for_localhost() {
-        env::set_var("FCM_HOST", "127.0.0.1:7777");
-        assert!(get_jump_host().is_none());
-        env::set_var("FCM_HOST", "localhost:7777");
-        assert!(get_jump_host().is_none());
-        env::remove_var("FCM_HOST");
-    }
-
-    #[test]
-    fn test_get_jump_host_for_remote() {
-        env::set_var("FCM_HOST", "192.168.1.100:7777");
-        let jh = get_jump_host();
-        assert!(jh.is_some());
-        let jh = jh.unwrap();
-        assert!(jh.ends_with("@192.168.1.100"));
-        env::remove_var("FCM_HOST");
-    }
-
-    #[test]
-    fn test_get_jump_host_strips_scheme() {
-        env::set_var("FCM_HOST", "http://10.0.0.5:7777");
-        let jh = get_jump_host();
-        assert!(jh.is_some());
-        let jh = jh.unwrap();
-        assert!(jh.ends_with("@10.0.0.5"));
         env::remove_var("FCM_HOST");
     }
 }
