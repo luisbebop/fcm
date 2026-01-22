@@ -169,6 +169,32 @@ const BLUE: &str = "\x1b[94m";
 const RESET: &str = "\x1b[0m";
 const BOLD: &str = "\x1b[1m";
 
+/// Zen koans for the create output
+const KOANS: &[&str] = &[
+    "The code that is not written has no bugs.",
+    "First, solve the problem. Then, write the code.",
+    "Simplicity is the ultimate sophistication.",
+    "Before enlightenment: write code. After enlightenment: write code.",
+    "The best code is no code at all.",
+    "A journey of a thousand deploys begins with git push.",
+    "In the beginner's mind there are many possibilities.",
+    "Move fast and fix things.",
+    "Make it work, make it right, make it fast.",
+    "Code is like humor. When you have to explain it, it's bad.",
+    "The obstacle is the path.",
+    "What is the sound of one container crashing?",
+];
+
+/// Get a random koan
+fn random_koan() -> &'static str {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let seed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos() as usize;
+    KOANS[seed % KOANS.len()]
+}
+
 /// Print the logo ASCII art
 fn print_logo() {
     println!(
@@ -239,32 +265,20 @@ pub fn create_vm() -> Result<(), Box<dyn Error>> {
         );
     }
 
+    // Print a random koan
+    let koan = random_koan();
+    println!();
+    println!("{d}  \"{}\"{reset}", koan, d = GRAY, reset = RESET);
     println!();
     println!("{bold}{w}  Quick Start:{reset}", bold = BOLD, w = WHITE, reset = RESET);
     println!();
-    println!("{d}  # Add the remote to your project{reset}", d = GRAY, reset = RESET);
+    println!("{d}  # Initialize and deploy{reset}", d = GRAY, reset = RESET);
+    println!("  {w}mkdir my-app && cd my-app{reset}", w = WHITE, reset = RESET);
+    println!("  {w}git init && echo 'web: python3 -m http.server $PORT' > Procfile{reset}", w = WHITE, reset = RESET);
     if let Some(git_url) = &vm.git_url {
-        println!(
-            "  {w}git remote add fcm {}{reset}",
-            git_url,
-            w = WHITE,
-            reset = RESET
-        );
+        println!("  {w}git remote add fcm {}{reset}", git_url, w = WHITE, reset = RESET);
     }
-    println!();
-    println!("{d}  # Create a simple Procfile{reset}", d = GRAY, reset = RESET);
-    println!(
-        "  {w}echo 'web: python3 -m http.server $PORT' > Procfile{reset}",
-        w = WHITE,
-        reset = RESET
-    );
-    println!();
-    println!("{d}  # Deploy!{reset}", d = GRAY, reset = RESET);
-    println!(
-        "  {w}git add . && git commit -m 'deploy' && git push fcm main{reset}",
-        w = WHITE,
-        reset = RESET
-    );
+    println!("  {w}git add -A && git commit -m 'init' && git push fcm main{reset}", w = WHITE, reset = RESET);
     println!();
 
     Ok(())
