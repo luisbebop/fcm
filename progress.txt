@@ -619,5 +619,14 @@
 - All 89 tests pass with zero warnings
 - Commit: fc088a3
 
+### Task 34: Fix Session Attachment Bug
+- Fixed bug where each connection created spurious tmux sessions (1, 2, 3...)
+- Root cause: using `sh -c` with compound tmux commands caused extra sessions
+- Solution: split into separate SSH calls for resize and attach
+- Now correctly maintains single `console-{vm_id}` session per VM
+- Multiple terminals connect to same session
+- Session state persists across disconnects
+- Commit: 7867c74
+
 ## Next Tasks
 - None - all PRD features implemented
