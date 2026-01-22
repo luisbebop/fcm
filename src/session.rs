@@ -17,10 +17,10 @@ pub enum SessionError {
     /// Session not found
     NotFound(String),
     /// VM not found or not running
-    #[allow(dead_code)] // Will be used in console streaming (Task 23/24)
+    #[allow(dead_code)] // Matched in daemon.rs but not constructed yet
     VmNotAvailable(String),
     /// SSH connection failed
-    #[allow(dead_code)] // Will be used in console streaming (Task 23/24)
+    #[allow(dead_code)] // Matched in daemon.rs but not constructed yet
     SshError(String),
     /// Tmux command failed
     TmuxError(String),
@@ -142,7 +142,6 @@ impl SessionManager {
     }
 
     /// Get a session by ID
-    #[allow(dead_code)] // Will be used in console streaming (Task 23/24)
     pub fn get_session(&self, session_id: &str) -> Option<SessionInfo> {
         let sessions = self.sessions.lock().unwrap();
         sessions.get(session_id).cloned()
@@ -275,7 +274,6 @@ fn kill_tmux_session(vm_ip: &str, session_name: &str) -> Result<(), SessionError
 
 /// Spawn an SSH process that attaches to a tmux session
 /// Returns the child process for I/O proxying
-#[allow(dead_code)] // Will be used in terminal streaming (Task 23/24)
 pub fn attach_to_session(vm_ip: &str, session_name: &str) -> Result<Child, SessionError> {
     let child = Command::new("ssh")
         .args([
