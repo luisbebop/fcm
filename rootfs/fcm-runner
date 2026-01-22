@@ -65,10 +65,16 @@ do_start() {
 
     cd "$APP_DIR"
 
-    # Start the process in background with PORT environment variable
+    # Start the process in background with required environment variables
     # Set PATH to include pip-installed binaries
+    # Set production mode for Rails/Rack apps
     export PORT
     export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
+    export RAILS_ENV=production
+    export RACK_ENV=production
+    export NODE_ENV=production
+    # Generate SECRET_KEY_BASE if not set (required for Rails production)
+    export SECRET_KEY_BASE="${SECRET_KEY_BASE:-$(head -c 64 /dev/urandom | base64 | tr -d '\n')}"
     nohup sh -c "$cmd" >> "$LOG_FILE" 2>&1 &
     local pid=$!
 
