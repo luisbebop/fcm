@@ -793,5 +793,14 @@
 - All 94 tests pass with zero clippy warnings
 - Commit: 4283fcc
 
+### Task 45: Add VCPU and Memory to ls and Create Output
+- Added vcpu_count and mem_size_mib fields to VmConfig struct
+- Used serde defaults so existing VMs get default values (1 vCPU, 512MB)
+- Updated VmResponse in both daemon.rs and client.rs
+- Updated list_vms() to show VCPU and MEMORY columns in table
+- Updated print_vm() to display vCPU and Memory for stop/start/create output
+- All 94 tests pass with zero warnings
+- Commit: 5666774
+
 ## Next Tasks
 - None - all PRD features implemented
