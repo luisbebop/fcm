@@ -576,5 +576,29 @@
 - All 88 tests pass with zero warnings
 - Commit: a87f4fc
 
+### Task 32: Improve Console UX for Seamless Experience
+- Improved console session persistence to match sprites.dev experience
+- session.rs:
+  - Added vm_session_name() for canonical session names (console-{vm_id})
+  - Added get_or_create_console() method that:
+    - Returns existing session if tracked in memory
+    - Checks if tmux session exists on VM and registers it
+    - Creates new tmux session only if needed
+  - One session per VM instead of multiple sessions with IDs
+  - Sessions survive client disconnects and daemon restarts
+- daemon.rs:
+  - Terminal handler now uses get_or_create_console() instead of get_session()
+  - Auto-creates session if missing when client connects
+- client.rs:
+  - Removed session ID from console output
+  - Cleaner UX: session details hidden from user
+- console.rs:
+  - Simplified output: "Connecting to <vm>..." instead of technical details
+  - On detach: shows "Run 'fcm console <vm>' to reconnect"
+  - Hide tmux implementation details completely
+- Added test for vm_session_name()
+- All 89 tests pass with zero warnings
+- Commit: fe6eb83
+
 ## Next Tasks
 - None - all PRD features implemented
