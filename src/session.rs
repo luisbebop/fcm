@@ -110,11 +110,12 @@ impl SessionManager {
     /// Get or create the console session for a VM
     ///
     /// Each VM has exactly one console session. This method:
-    /// 1. Returns existing session if tracked in memory
-    /// 2. Checks if tmux session exists on VM and registers it
-    /// 3. Creates new tmux session if needed
+    /// 1. Checks if tmux session exists on VM
+    /// 2. Creates new tmux session if needed (e.g., user typed 'exit')
+    /// 3. Returns session info (cached or newly created)
     ///
-    /// This ensures the session persists across client disconnects.
+    /// This ensures the session persists across client disconnects,
+    /// and automatically recreates the session if the user exited the shell.
     pub fn get_or_create_console(
         &self,
         vm_id: &str,
@@ -123,21 +124,22 @@ impl SessionManager {
         let tmux_session = vm_session_name(vm_id);
         let session_id = vm_id.to_string(); // Use VM ID as session ID for simplicity
 
-        // Check if we already have this session in memory
-        {
-            let sessions = self.sessions.lock().unwrap();
-            if let Some(session) = sessions.get(&session_id) {
-                return Ok(session.clone());
-            }
-        }
-
-        // Check if tmux session exists on the VM (from previous daemon run or survived disconnect)
+        // Always check if tmux session exists on the VM
+        // (it may have been destroyed if user typed 'exit')
         let active_sessions = list_tmux_sessions(vm_ip).unwrap_or_default();
         let session_exists = active_sessions.contains(&tmux_session);
 
         if !session_exists {
             // Create tmux session on VM via SSH
             create_tmux_session(vm_ip, &tmux_session)?;
+        }
+
+        // Check if we already have this session in memory
+        {
+            let sessions = self.sessions.lock().unwrap();
+            if let Some(session) = sessions.get(&session_id) {
+                return Ok(session.clone());
+            }
         }
 
         // Register session in memory
