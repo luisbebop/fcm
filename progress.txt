@@ -824,5 +824,15 @@
 - All 94 tests pass with zero warnings
 - Commit: a3a16e8
 
+### Task 48: Stream Startup Logs in Git Push Output
+- Added "Startup logs:" section to git push output
+- Shows tail of /var/log/fcm-web.log after deployment
+- On success: shows last 20 lines of startup logs
+- On failure: shows last 30 lines to help debug errors
+- Helps debug issues like gunicorn startup failures
+- Refactored hook to use ssh_cmd() helper function
+- All 94 tests pass with zero warnings
+- Commit: f68a8d3
+
 ## Next Tasks
 - None - all PRD features implemented
