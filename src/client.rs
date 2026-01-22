@@ -1,5 +1,6 @@
 // HTTP client module for communicating with the daemon
 
+use crate::console;
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::error::Error;
@@ -82,6 +83,17 @@ struct SshInfoResponse {
 #[derive(Debug, Deserialize)]
 struct ErrorResponse {
     error: String,
+}
+
+/// Session info response
+#[derive(Debug, Deserialize)]
+struct SessionResponse {
+    id: String,
+    #[allow(dead_code)] // Field included for completeness but not displayed
+    vm_id: String,
+    tmux_session: String,
+    created_at: u64,
+    is_default: bool,
 }
 
 /// Get the client token file path (~/.fcm-token)
@@ -301,6 +313,83 @@ pub fn destroy_vm(vm: &str) -> Result<(), Box<dyn Error>> {
     make_request("DELETE", &format!("/vms/{}", vm), None)?;
     println!("Destroyed VM '{}'", vm);
     Ok(())
+}
+
+/// Open a persistent console session on a VM
+pub fn console_vm(vm: &str) -> Result<(), Box<dyn Error>> {
+    // Create a new default session via the HTTP API
+    let body = r#"{"is_default": true}"#;
+    let response = make_request("POST", &format!("/vms/{}/sessions", vm), Some(body.to_string()))?;
+    let session: SessionResponse = response.into_json()?;
+
+    println!("Created session '{}' for VM '{}'", session.id, vm);
+
+    // Connect to the session via the terminal streaming protocol
+    console::connect(vm, &session.id).map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+/// List active sessions for a VM
+pub fn list_sessions(vm: &str) -> Result<(), Box<dyn Error>> {
+    let response = make_request("GET", &format!("/vms/{}/sessions", vm), None)?;
+    let sessions: Vec<SessionResponse> = response.into_json()?;
+
+    if sessions.is_empty() {
+        println!("No active sessions for VM '{}'", vm);
+        return Ok(());
+    }
+
+    // Print header
+    println!(
+        "{:<12} {:<20} {:<12} DEFAULT",
+        "SESSION ID", "TMUX SESSION", "CREATED"
+    );
+    println!("{}", "-".repeat(60));
+
+    // Print each session
+    for session in sessions {
+        let default_str = if session.is_default { "*" } else { "" };
+        // Format timestamp as relative time or simple date
+        let created = format_timestamp(session.created_at);
+        println!(
+            "{:<12} {:<20} {:<12} {}",
+            session.id, session.tmux_session, created, default_str
+        );
+    }
+
+    Ok(())
+}
+
+/// Attach to an existing session on a VM
+pub fn attach_session(vm: &str, session_id: &str) -> Result<(), Box<dyn Error>> {
+    // Connect to the existing session via the terminal streaming protocol
+    console::connect(vm, session_id).map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+/// Format a unix timestamp as a human-readable string
+fn format_timestamp(timestamp: u64) -> String {
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    let created_time = UNIX_EPOCH + Duration::from_secs(timestamp);
+    let now = SystemTime::now();
+
+    if let Ok(duration) = now.duration_since(created_time) {
+        let secs = duration.as_secs();
+        if secs < 60 {
+            format!("{}s ago", secs)
+        } else if secs < 3600 {
+            format!("{}m ago", secs / 60)
+        } else if secs < 86400 {
+            format!("{}h ago", secs / 3600)
+        } else {
+            format!("{}d ago", secs / 86400)
+        }
+    } else {
+        "just now".to_string()
+    }
 }
 
 /// Print VM details
