@@ -233,6 +233,13 @@ fn handle_create_vm(mut request: Request) -> Result<(), Box<dyn Error>> {
         }
     };
 
+    // Add SSH key to host's authorized_keys for git push access
+    if let Some(ref key) = create_request.ssh_public_key {
+        if let Err(e) = crate::git::add_ssh_key_to_host(key) {
+            eprintln!("Warning: Failed to add SSH key to host: {}", e);
+        }
+    }
+
     // Always use random name and expose port 8000 by default
     match vm::create_vm(None, Some(DEFAULT_EXPOSE_PORT), create_request.ssh_public_key) {
         Ok(config) => {

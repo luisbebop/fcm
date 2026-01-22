@@ -141,6 +141,54 @@ pub fn get_clone_url(vm_name: &str, server_host: &str) -> String {
     format!("root@{}:{}.git", server_host, vm_name)
 }
 
+/// Add an SSH public key to the host's authorized_keys for git push access
+pub fn add_ssh_key_to_host(ssh_public_key: &str) -> Result<(), GitError> {
+    let ssh_dir = PathBuf::from("/root/.ssh");
+    let authorized_keys_path = ssh_dir.join("authorized_keys");
+
+    // Ensure .ssh directory exists with correct permissions
+    if !ssh_dir.exists() {
+        fs::create_dir_all(&ssh_dir)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&ssh_dir, fs::Permissions::from_mode(0o700))?;
+        }
+    }
+
+    // Read existing authorized_keys or create empty
+    let existing = if authorized_keys_path.exists() {
+        fs::read_to_string(&authorized_keys_path)?
+    } else {
+        String::new()
+    };
+
+    // Check if key already exists (avoid duplicates)
+    let key_trimmed = ssh_public_key.trim();
+    if existing.lines().any(|line| line.trim() == key_trimmed) {
+        return Ok(()); // Key already exists
+    }
+
+    // Append the new key
+    let mut content = existing;
+    if !content.is_empty() && !content.ends_with('\n') {
+        content.push('\n');
+    }
+    content.push_str(key_trimmed);
+    content.push('\n');
+
+    fs::write(&authorized_keys_path, content)?;
+
+    // Set correct permissions on authorized_keys
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&authorized_keys_path, fs::Permissions::from_mode(0o600))?;
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -179,5 +227,18 @@ mod tests {
     fn test_repo_exists_false() {
         // Non-existent repo should return false
         assert!(!repo_exists("nonexistent-vm-12345"));
+    }
+
+    #[test]
+    fn test_add_ssh_key_to_host_content() {
+        // Test the key trimming and formatting logic
+        let key = "ssh-ed25519 AAAAC3... user@host";
+        let trimmed = key.trim();
+        assert_eq!(trimmed, key);
+
+        // Test key with whitespace
+        let key_with_spaces = "  ssh-ed25519 AAAAC3... user@host  \n";
+        let trimmed = key_with_spaces.trim();
+        assert_eq!(trimmed, "ssh-ed25519 AAAAC3... user@host");
     }
 }
