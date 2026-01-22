@@ -803,13 +803,14 @@
 - Commit: 5666774
 
 ### Task 46: Add Disk Space to ls and Create Output
-- Added disk_size_mb() method to VmConfig that uses `du -m` for actual disk usage
-- Handles sparse files correctly (shows actual usage, not apparent size)
-- Updated VmResponse in daemon.rs and client.rs to include disk_size_mb
-- Updated list_vms() to show DISK column with actual disk usage in MB
-- Updated print_vm() to display Disk for stop/start/create output
+- Added disk_used_mb() method to VmConfig using `du -m` for actual disk usage
+- Added disk_max_mb() method using file metadata for apparent/max size
+- Handles sparse files correctly (shows actual vs apparent size)
+- Updated VmResponse to include both disk_used_mb and disk_max_mb
+- Display format: "202MB/1024MB" (used/max)
+- Updated list_vms() and print_vm() to show disk in used/max format
 - All 94 tests pass with zero warnings
-- Commit: 27bc32f
+- Commits: 27bc32f, 5832b10
 
 ## Next Tasks
 - None - all PRD features implemented
