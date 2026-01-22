@@ -112,6 +112,31 @@ impl VmConfig {
         self.dir().join("firecracker.pid")
     }
 
+    /// Get the actual disk space used by the rootfs (in MB)
+    /// Uses du to get actual disk usage for sparse files
+    pub fn disk_size_mb(&self) -> u64 {
+        let rootfs = self.rootfs_path();
+        if !rootfs.exists() {
+            return 0;
+        }
+        // Use du -m to get actual disk usage in MB (handles sparse files correctly)
+        let output = Command::new("du")
+            .args(["-m", rootfs.to_str().unwrap_or("")])
+            .output();
+        match output {
+            Ok(out) if out.status.success() => {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                // du output format: "SIZE\tPATH"
+                stdout
+                    .split_whitespace()
+                    .next()
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .unwrap_or(0)
+            }
+            _ => 0,
+        }
+    }
+
     /// Save config to disk
     pub fn save(&self) -> io::Result<()> {
         let json = serde_json::to_string_pretty(self)
