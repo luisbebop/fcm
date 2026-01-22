@@ -96,6 +96,7 @@ fn generate_post_receive_hook(vm_name: &str, vm_ip: &str) -> String {
 # This hook deploys code to the VM after git push
 
 set -e
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 VM_NAME="{vm_name}"
 VM_IP="{vm_ip}"
@@ -119,7 +120,7 @@ done
 
 # Sync code to VM
 echo "-----> Syncing code to VM..."
-sshpass -p "root" scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -r "$WORK_TREE/." "root@$VM_IP:$APP_DIR/"
+cd "$WORK_TREE" && tar cf - . | sshpass -p "root" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@$VM_IP" "cd $APP_DIR && tar xf -"
 
 # Run deployment on VM
 echo "-----> Running deployment..."

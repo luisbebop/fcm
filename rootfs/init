@@ -69,34 +69,16 @@ ss -tlnp 2>&1 >> $LOG || netstat -tlnp 2>&1 >> $LOG
 
 log ">>> init: ssh launched (step 2)"
 
-log ">>> init: starting http (step 3)"
+# Create /app directory for Procfile deployments
+mkdir -p /app
 
-# Start HTTP server using python
-mkdir -p /www
-echo "hello from fcm VM" > /www/index.html
-cp $LOG /www/init.log 2>/dev/null || true
-cd /www
-python3 -m http.server 8000 >> $LOG 2>&1 &
-HTTP_PID=$!
-sleep 1
-if kill -0 $HTTP_PID 2>/dev/null; then
-    log ">>> init: http started (pid $HTTP_PID)"
-else
-    log ">>> init: http failed to start"
-fi
-
-# Check ports again after http started
-log ">>> init: final port check:"
-ss -tlnp 2>&1 >> $LOG || netstat -tlnp 2>&1 >> $LOG || log ">>> init: cannot list ports"
-
-log ">>> init: services started (step 4)"
+log ">>> init: services started"
 
 log "============================================"
 log "  fcm VM started"
 log "============================================"
 
-# Keep init running forever and update log file periodically
+# Keep init running
 while true; do
-    cp $LOG /www/init.log 2>/dev/null || true
     sleep 60
 done

@@ -78,7 +78,7 @@ log "Found web process: $WEB_CMD"
 
 # Restart the web process using fcm-runner
 log "Starting web process on port $PORT..."
-fcm-runner restart "$WEB_CMD"
+/usr/local/bin/fcm-runner restart "$WEB_CMD"
 
 log "Deployment complete!"
 log "App running on port $PORT"

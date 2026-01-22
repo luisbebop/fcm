@@ -46,6 +46,8 @@ do_stop() {
     else
         log "No process running"
     fi
+    # Also kill anything else using the port (e.g., default init http server)
+    fuser -k "$PORT/tcp" 2>/dev/null || true
 }
 
 do_start() {
