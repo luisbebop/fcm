@@ -181,8 +181,14 @@ impl SessionManager {
 
     /// Sync sessions with actual tmux state on VM
     /// Removes sessions that no longer exist in tmux
+    /// If unable to list tmux sessions (SSH error), skip syncing to preserve state
     pub fn sync_sessions(&self, vm_id: &str, vm_ip: &str) {
-        let active_tmux = list_tmux_sessions(vm_ip).unwrap_or_default();
+        // Only sync if we can successfully list tmux sessions
+        // If listing fails, keep existing sessions rather than removing all
+        let active_tmux = match list_tmux_sessions(vm_ip) {
+            Ok(sessions) => sessions,
+            Err(_) => return, // Skip sync if we can't reach the VM
+        };
         let mut sessions = self.sessions.lock().unwrap();
 
         sessions.retain(|_, session| {
@@ -202,8 +208,10 @@ impl Default for SessionManager {
 
 /// Create a tmux session on a VM via SSH
 fn create_tmux_session(vm_ip: &str, session_name: &str) -> Result<(), SessionError> {
-    let output = Command::new("ssh")
+    let output = Command::new("sshpass")
         .args([
+            "-p", "root",
+            "ssh",
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
             "-o", "ConnectTimeout=5",
@@ -225,8 +233,10 @@ fn create_tmux_session(vm_ip: &str, session_name: &str) -> Result<(), SessionErr
 
 /// List tmux sessions on a VM via SSH
 fn list_tmux_sessions(vm_ip: &str) -> Result<Vec<String>, SessionError> {
-    let output = Command::new("ssh")
+    let output = Command::new("sshpass")
         .args([
+            "-p", "root",
+            "ssh",
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
             "-o", "ConnectTimeout=5",
@@ -250,8 +260,10 @@ fn list_tmux_sessions(vm_ip: &str) -> Result<Vec<String>, SessionError> {
 
 /// Kill a tmux session on a VM via SSH
 fn kill_tmux_session(vm_ip: &str, session_name: &str) -> Result<(), SessionError> {
-    let output = Command::new("ssh")
+    let output = Command::new("sshpass")
         .args([
+            "-p", "root",
+            "ssh",
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
             "-o", "ConnectTimeout=5",
@@ -274,8 +286,10 @@ fn kill_tmux_session(vm_ip: &str, session_name: &str) -> Result<(), SessionError
 /// Spawn an SSH process that attaches to a tmux session
 /// Returns the child process for I/O proxying
 pub fn attach_to_session(vm_ip: &str, session_name: &str) -> Result<Child, SessionError> {
-    let child = Command::new("ssh")
+    let child = Command::new("sshpass")
         .args([
+            "-p", "root",
+            "ssh",
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
             "-o", "ConnectTimeout=5",
