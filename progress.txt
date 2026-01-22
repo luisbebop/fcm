@@ -700,5 +700,51 @@
 - All 93 tests pass (single-threaded due to env var isolation)
 - Commit: 6a3a3eb
 
+### Task 38: Fix Git Deployment Issues Found During Testing
+- Fixed issues discovered during end-to-end git deployment testing
+- src/git.rs:
+  - Added PATH export to post-receive hook (SSH sessions don't have system PATH)
+  - Changed code sync from scp to tar-over-ssh (dropbear lacks sftp-server)
+- rootfs/fcm-runner:
+  - Added fuser -k to kill any process on PORT before starting
+  - Prevents conflicts with old processes or init's default server
+- rootfs/fcm-deploy:
+  - Use full path /usr/local/bin/fcm-runner (not in PATH via SSH)
+- rootfs/init:
+  - Removed default HTTP server on port 8000 (conflicts with deployed apps)
+  - Create /app directory for Procfile deployments at boot
+- Tested full deployment flow:
+  - `git push fcm master` syncs code and triggers deployment
+  - Dependency detection works (Python, Ruby, Node.js)
+  - Web process starts/restarts correctly on port 8000
+  - Re-deployment properly stops old process before starting new one
+- All 93 tests pass
+- Commit: dfc771a
+
+### Task 39: Add SSH Key to Host for Git Push Access
+- Fixed git push requiring password by adding user's SSH key to host
+- git.rs:
+  - Added add_ssh_key_to_host() function
+  - Creates /root/.ssh directory with 700 permissions if needed
+  - Appends SSH public key to /root/.ssh/authorized_keys (600 permissions)
+  - Avoids duplicate keys by checking existing entries
+- daemon.rs:
+  - Updated handle_create_vm() to call add_ssh_key_to_host() when SSH key provided
+  - Key is added to host before VM creation proceeds
+- Now when user runs `fcm create` with an SSH key:
+  - Key is injected into VM's rootfs (for SSH into VM)
+  - Key is added to host's authorized_keys (for git push to repo)
+- All 94 tests pass
+- Commit: 6ea98ab
+
+### Task 40: Fix Git Push PATH Issue
+- Fixed "git-receive-pack: command not found" error during git push
+- Root cause: Non-interactive SSH sessions don't have PATH set
+- Solution: Enable SSH user environment files
+  - Set `PermitUserEnvironment yes` in /etc/ssh/sshd_config
+  - Created /root/.ssh/environment with PATH
+  - Restarted ssh service
+- Git push now works without password using user's SSH key
+
 ## Next Tasks
 - None - all PRD features implemented
