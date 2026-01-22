@@ -1,13 +1,16 @@
 // Daemon HTTP server module
 
 use crate::network;
-use crate::session::{SessionError, SessionInfo, SessionManager};
+use crate::session::{attach_to_session, SessionError, SessionInfo, SessionManager};
 use crate::vm::{self, VmConfig, VmError, VmState, BASE_DIR};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fs;
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
+use std::thread;
 use tiny_http::{Header, Method, Request, Response, Server};
 
 /// Request to create a VM
@@ -18,8 +21,27 @@ struct CreateVmRequest {
 
 const BIND_ADDR: &str = "0.0.0.0:7777";
 
+/// Terminal server bind address
+const TERMINAL_BIND_ADDR: &str = "0.0.0.0:7778";
+
 /// Default port to expose for all VMs
 const DEFAULT_EXPOSE_PORT: u16 = 8000;
+
+/// Terminal connect request from client
+#[derive(Debug, Deserialize)]
+struct TerminalConnectRequest {
+    vm: String,
+    session: String,
+    token: String,
+}
+
+/// Terminal connect response to client
+#[derive(Debug, Serialize)]
+struct TerminalConnectResponse {
+    success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
 
 /// Response for VM operations
 #[derive(Debug, Serialize)]
@@ -462,6 +484,240 @@ fn handle_request(
     }
 }
 
+/// Handle a single terminal connection
+fn handle_terminal_connection(
+    mut stream: TcpStream,
+    token: &str,
+    session_manager: &SessionManager,
+) {
+    // Set a read timeout for the initial handshake
+    if stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+        .is_err()
+    {
+        return;
+    }
+
+    // Read the JSON connect request (terminated by newline)
+    let read_stream = match stream.try_clone() {
+        Ok(s) => s,
+        Err(_) => {
+            let _ = send_terminal_error(&mut stream, "Failed to clone stream");
+            return;
+        }
+    };
+    let mut reader = BufReader::new(read_stream);
+    let mut request_line = String::new();
+
+    if reader.read_line(&mut request_line).is_err() {
+        let _ = send_terminal_error(&mut stream, "Failed to read request");
+        return;
+    }
+
+    // Parse the connect request
+    let request: TerminalConnectRequest = match serde_json::from_str(&request_line) {
+        Ok(req) => req,
+        Err(e) => {
+            let _ = send_terminal_error(&mut stream, &format!("Invalid request: {}", e));
+            return;
+        }
+    };
+
+    println!("Terminal connection: vm={}, session={}", request.vm, request.session);
+
+    // Validate token
+    if request.token != token {
+        let _ = send_terminal_error(&mut stream, "Invalid token");
+        return;
+    }
+
+    // Find VM
+    let config = match vm::find_vm(&request.vm) {
+        Ok(config) => config,
+        Err(_) => {
+            let _ = send_terminal_error(&mut stream, &format!("VM '{}' not found", request.vm));
+            return;
+        }
+    };
+
+    // Check VM is running
+    if config.state != VmState::Running {
+        let _ = send_terminal_error(&mut stream, &format!("VM '{}' is not running", request.vm));
+        return;
+    }
+
+    // Look up session
+    let session = match session_manager.get_session(&request.session) {
+        Some(session) => session,
+        None => {
+            let _ = send_terminal_error(
+                &mut stream,
+                &format!("Session '{}' not found", request.session),
+            );
+            return;
+        }
+    };
+
+    // Verify session belongs to requested VM
+    if session.vm_id != config.id {
+        let _ = send_terminal_error(
+            &mut stream,
+            &format!("Session '{}' does not belong to VM '{}'", request.session, request.vm),
+        );
+        return;
+    }
+
+    // Spawn SSH process attached to tmux session
+    let mut child = match attach_to_session(&config.ip, &session.tmux_session) {
+        Ok(child) => child,
+        Err(e) => {
+            let _ = send_terminal_error(&mut stream, &format!("Failed to attach to session: {}", e));
+            return;
+        }
+    };
+
+    // Send success response
+    let response = TerminalConnectResponse {
+        success: true,
+        error: None,
+    };
+    if let Err(e) = send_terminal_response(&mut stream, &response) {
+        eprintln!("Failed to send success response: {}", e);
+        let _ = child.kill();
+        return;
+    }
+
+    // Clear read timeout for I/O proxying
+    let _ = stream.set_read_timeout(None);
+
+    // Get child stdin/stdout
+    let child_stdin = match child.stdin.take() {
+        Some(stdin) => stdin,
+        None => {
+            eprintln!("Failed to get child stdin");
+            let _ = child.kill();
+            return;
+        }
+    };
+    let child_stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            eprintln!("Failed to get child stdout");
+            let _ = child.kill();
+            return;
+        }
+    };
+
+    // Proxy I/O between client and SSH process
+    proxy_terminal_io(stream, child_stdin, child_stdout);
+
+    // Wait for child to exit
+    let _ = child.wait();
+}
+
+/// Send an error response to the terminal client
+fn send_terminal_error(stream: &mut TcpStream, message: &str) -> std::io::Result<()> {
+    let response = TerminalConnectResponse {
+        success: false,
+        error: Some(message.to_string()),
+    };
+    send_terminal_response(stream, &response)
+}
+
+/// Send a JSON response to the terminal client
+fn send_terminal_response(stream: &mut TcpStream, response: &TerminalConnectResponse) -> std::io::Result<()> {
+    let json = serde_json::to_string(response).unwrap();
+    stream.write_all(json.as_bytes())?;
+    stream.write_all(b"\n")?;
+    stream.flush()
+}
+
+/// Proxy I/O between TCP stream and child process stdin/stdout
+fn proxy_terminal_io(
+    stream: TcpStream,
+    mut child_stdin: std::process::ChildStdin,
+    mut child_stdout: std::process::ChildStdout,
+) {
+    // Clone stream for reader thread
+    let mut read_stream = match stream.try_clone() {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let mut write_stream = stream;
+
+    // Spawn thread to read from child stdout and write to client
+    let stdout_handle = thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        loop {
+            match child_stdout.read(&mut buf) {
+                Ok(0) => break, // EOF
+                Ok(n) => {
+                    if write_stream.write_all(&buf[..n]).is_err() {
+                        break;
+                    }
+                    if write_stream.flush().is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    // Main thread reads from client and writes to child stdin
+    let mut buf = [0u8; 4096];
+    loop {
+        match read_stream.read(&mut buf) {
+            Ok(0) => break, // EOF
+            Ok(n) => {
+                if child_stdin.write_all(&buf[..n]).is_err() {
+                    break;
+                }
+                if child_stdin.flush().is_err() {
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+
+    // Close stdin to signal EOF to child
+    drop(child_stdin);
+
+    // Wait for stdout thread to finish
+    let _ = stdout_handle.join();
+}
+
+/// Run the terminal server (port 7778)
+fn run_terminal_server(token: String, session_manager: SessionManager) {
+    let listener = match TcpListener::bind(TERMINAL_BIND_ADDR) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("Failed to bind terminal server to {}: {}", TERMINAL_BIND_ADDR, e);
+            return;
+        }
+    };
+
+    println!("Terminal server listening on {}", TERMINAL_BIND_ADDR);
+
+    for stream in listener.incoming() {
+        match stream {
+            Ok(stream) => {
+                let token = token.clone();
+                let session_manager = session_manager.clone();
+
+                // Handle each connection in a new thread
+                thread::spawn(move || {
+                    handle_terminal_connection(stream, &token, &session_manager);
+                });
+            }
+            Err(e) => {
+                eprintln!("Terminal server accept error: {}", e);
+            }
+        }
+    }
+}
+
 /// Run the daemon HTTP server
 pub fn run() -> Result<(), Box<dyn Error>> {
     // Check if running as root (required for firecracker)
@@ -484,6 +740,15 @@ pub fn run() -> Result<(), Box<dyn Error>> {
 
     // Create session manager for persistent console sessions
     let session_manager = SessionManager::new();
+
+    // Start terminal server in a separate thread
+    {
+        let terminal_token = token.clone();
+        let terminal_session_manager = session_manager.clone();
+        thread::spawn(move || {
+            run_terminal_server(terminal_token, terminal_session_manager);
+        });
+    }
 
     // Create HTTP server
     let server = Server::http(BIND_ADDR).map_err(|e| format!("Failed to bind to {}: {}", BIND_ADDR, e))?;
@@ -566,5 +831,41 @@ mod tests {
     #[test]
     fn test_default_expose_port() {
         assert_eq!(DEFAULT_EXPOSE_PORT, 8000);
+    }
+
+    #[test]
+    fn test_terminal_connect_request_deserialization() {
+        let json = r#"{"vm": "test-vm", "session": "abc123", "token": "secret"}"#;
+        let request: TerminalConnectRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(request.vm, "test-vm");
+        assert_eq!(request.session, "abc123");
+        assert_eq!(request.token, "secret");
+    }
+
+    #[test]
+    fn test_terminal_connect_response_success() {
+        let response = TerminalConnectResponse {
+            success: true,
+            error: None,
+        };
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains(r#""success":true"#));
+        assert!(!json.contains("error"));
+    }
+
+    #[test]
+    fn test_terminal_connect_response_error() {
+        let response = TerminalConnectResponse {
+            success: false,
+            error: Some("Session not found".to_string()),
+        };
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains(r#""success":false"#));
+        assert!(json.contains("Session not found"));
+    }
+
+    #[test]
+    fn test_terminal_bind_addr() {
+        assert_eq!(TERMINAL_BIND_ADDR, "0.0.0.0:7778");
     }
 }
