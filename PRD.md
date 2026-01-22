@@ -19,13 +19,15 @@ simple token-based auth:
 ## commands
 
 ```
-fcm create [--name myvm] [--expose 8000]   # create vm, optionally expose port
-fcm ls                                      # list vms
-fcm ssh <vm>                                # ssh into vm
-fcm stop <vm>                               # stop vm
-fcm start <vm>                              # start stopped vm
-fcm destroy <vm>                            # destroy vm
-fcm daemon                                  # run daemon (root)
+fcm create                    # create vm with random name, expose port 8000
+fcm ls                        # list vms
+fcm console <vm>              # open persistent console session
+fcm sessions <vm>             # list active sessions for a vm
+fcm attach <vm> <session-id>  # reattach to existing session
+fcm stop <vm>                 # stop vm
+fcm start <vm>                # start stopped vm
+fcm destroy <vm>              # destroy vm
+fcm daemon                    # run daemon (root)
 ```
 
 ## vm names
@@ -58,8 +60,10 @@ fcm/
 ├── Cargo.toml
 └── src/
     ├── main.rs          # cli parsing, entry point
-    ├── daemon.rs        # http server on localhost:7777
+    ├── daemon.rs        # http server on :7777, terminal server on :7778
     ├── client.rs        # http client to daemon (with token auth)
+    ├── console.rs       # terminal streaming client for console/attach
+    ├── session.rs       # session management (create/list/attach tmux sessions)
     ├── vm.rs            # vm create/start/stop/destroy
     ├── firecracker.rs   # firecracker api over unix socket
     ├── network.rs       # tap device, ip allocation
@@ -106,10 +110,63 @@ no async runtime - sync http only.
 - caddy auto-ssl via let's encrypt
 - append block to `/etc/caddy/Caddyfile`, reload
 
+## persistent console sessions
+
+cli-based interactive console with persistent, detachable sessions (similar to sprites.dev):
+
+### architecture
+
+```
+┌─────────────┐         ┌─────────────┐         ┌─────────┐
+│  fcm CLI    │ ──TCP── │   Daemon    │ ──SSH── │   VM    │
+│ (any host)  │  :7778  │  (manages   │         │ (tmux)  │
+└─────────────┘         │  sessions)  │         └─────────┘
+                        └─────────────┘
+```
+
+### how it works
+
+1. each vm runs `tmux` by default
+2. daemon manages sessions internally (creates/attaches tmux sessions via ssh to vm)
+3. cli connects to daemon on streaming port (7778)
+4. daemon proxies terminal i/o between cli and vm's tmux session
+5. if client disconnects (network drop, close terminal), tmux session keeps running
+6. client can reconnect anytime with `fcm attach`
+
+### session management
+
+- `fcm console <vm>` - creates new session or attaches to existing default session
+- `fcm sessions <vm>` - lists all active sessions for a vm
+- `fcm attach <vm> <session-id>` - reattaches to a specific session
+- sessions persist until explicitly killed or vm is stopped
+- supports multiple concurrent sessions per vm (multi-user ready)
+
+### daemon endpoints
+
+```
+POST   /vms/{id}/sessions              # create new session, returns session-id
+GET    /vms/{id}/sessions              # list active sessions
+DELETE /vms/{id}/sessions/{session-id} # kill a session
+```
+
+### terminal streaming (port 7778)
+
+- daemon listens on tcp port 7778 for terminal connections
+- client connects, sends: `{"vm": "vm-id", "session": "session-id", "token": "auth-token"}`
+- daemon authenticates, then spawns `ssh root@vm-ip tmux attach -t session-id`
+- daemon proxies raw terminal i/o between client and ssh process
+- client handles raw terminal mode for proper tty experience
+
+### vm requirements
+
+- tmux installed in base rootfs
+- ssh access from daemon to vm (already works via internal network)
+
 ## base image
 
 create new alpine-based rootfs with:
 - openssh-server (with root login enabled)
+- tmux (for persistent console sessions)
 - ruby 4.0 + bundler (latest stable: 4.0.1)
 - python 3.14 + pip (latest stable: 3.14.2)
 - minimal init script (same pattern as existing alpine image)
@@ -119,7 +176,7 @@ dockerfile:
 FROM alpine:edge
 RUN apk add --no-cache \
     openssh ruby ruby-bundler python3 py3-pip \
-    curl bash iproute2
+    tmux curl bash iproute2
 # configure ssh
 RUN ssh-keygen -A && \
     echo "PermitRootLogin yes" >> /etc/ssh/sshd_config && \
@@ -163,8 +220,11 @@ build: `docker build + docker export + dd + mkfs.ext4 + tar extract`
 ## verification
 
 1. `sudo fcm daemon &` - start daemon
-2. `fcm create --name test --expose 8000` - create vm
+2. `fcm create` - create vm (auto-generates name like "cosmic-nova")
 3. `fcm ls` - see vm running
-4. `fcm ssh test` - ssh in, verify ruby/python available
-5. `curl https://test.64-34-93-45.sslip.io` - verify ssl works
-6. `fcm destroy test` - cleanup
+4. `fcm console cosmic-nova` - open persistent console, verify ruby/python available
+5. disconnect (close terminal or network drop)
+6. `fcm sessions cosmic-nova` - see session still running
+7. `fcm attach cosmic-nova <session-id>` - reattach, verify state preserved
+8. `curl https://cosmic-nova.64-34-93-45.sslip.io` - verify ssl works
+9. `fcm destroy cosmic-nova` - cleanup
