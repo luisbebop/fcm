@@ -2,7 +2,7 @@ FROM alpine:edge
 
 RUN apk add --no-cache \
     dropbear dropbear-scp ruby ruby-bundler python3 py3-pip \
-    curl bash iproute2 rng-tools
+    tmux curl bash iproute2 rng-tools
 
 # Configure dropbear SSH and set root password
 RUN mkdir -p /etc/dropbear && \
