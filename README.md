@@ -1,5 +1,7 @@
 # fcm
 
+![fcm create](image.png)
+
 A dead-simple CLI for running microVMs on bare metal. Create a VM, push your code, get a URL. That's it.
 
 ```
