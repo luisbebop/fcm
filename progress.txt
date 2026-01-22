@@ -551,5 +551,18 @@
 - All 88 tests pass with zero warnings
 - Commit: 0a44c31
 
+### Task 30: Add tmux to Base Rootfs Image
+- PRD specifies tmux for persistent console sessions, but it was missing from Dockerfile
+- rootfs/Dockerfile:
+  - Added tmux to apk add package list
+- Rebuilt base-rootfs.img with tmux included (145MB sparse)
+- Tested with new VM (orbital-comet):
+  - `fcm sessions` - correctly shows no sessions initially
+  - `fcm console` - creates session successfully, connects to terminal server
+  - `fcm attach` - attaches to existing session correctly
+  - tmux session persists on VM (verified via direct SSH)
+- All 88 tests pass with zero warnings
+- Commit: e71ea59
+
 ## Next Tasks
 - None - all PRD features implemented
