@@ -297,8 +297,8 @@ pub fn list_vms() -> Result<(), Box<dyn Error>> {
 
     // Print header
     println!(
-        "{:<20} {:<10} {:<40} {}",
-        "NAME", "STATE", "DOMAIN", "GIT"
+        "{:<20} {:<10} {:<40} GIT",
+        "NAME", "STATE", "DOMAIN"
     );
     println!("{}", "-".repeat(110));
 
