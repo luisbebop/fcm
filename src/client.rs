@@ -163,9 +163,13 @@ fn find_ssh_public_key() -> Option<String> {
 }
 
 /// ANSI color codes
-const YELLOW: &str = "\x1b[33m";
-const GREEN: &str = "\x1b[32m";
-const BRIGHT_YELLOW: &str = "\x1b[93m";
+const RED: &str = "\x1b[91m";
+const ORANGE: &str = "\x1b[38;5;208m";
+const YELLOW: &str = "\x1b[93m";
+const GREEN: &str = "\x1b[92m";
+const CYAN: &str = "\x1b[96m";
+const BLUE: &str = "\x1b[94m";
+const MAGENTA: &str = "\x1b[95m";
 const GRAY: &str = "\x1b[90m";
 const RESET: &str = "\x1b[0m";
 const BOLD: &str = "\x1b[1m";
@@ -174,22 +178,27 @@ const BOLD: &str = "\x1b[1m";
 fn print_logo() {
     println!(
         r#"
-{d}            ░░▒▒▓▓{g}██{d}▓▓▒▒░░{reset}
-{d}         ░▒▓{g}██{by}▀▀      ▀▀{g}██{d}▓▒░{reset}
-{d}       ░▓{g}█{by}▀                ▀{g}█{d}▓░{reset}
-{d}      ▒{g}█{by}▀                    ▀{g}█{d}▒{reset}
-{d}     ▒{g}█{by}▌                      ▐{g}█{d}▒{reset}
-{d}     ▓{g}█                        █{d}▓{reset}
-{d}     ▓{g}█                        █{d}▓{reset}
-{d}     ▒{g}█{by}▌                      ▐{g}█{d}▒{reset}
-{d}      ▒{g}█{by}▄                    ▄{g}█{d}▒{reset}
-{d}       ░▓{g}█{by}▄                ▄{g}█{d}▓░{reset}
-{d}         ░▒▓{g}██{by}▄▄      ▄▄{g}██{d}▓▒░{reset}
-{d}            ░░▒▒▓▓{g}██{d}▓▓▒▒░░{reset}
+{d}            ░░▒▒▓▓{r}██{d}▓▓▒▒░░{reset}
+{d}         ░▒▓{o}██{r}▀▀      ▀▀{o}██{d}▓▒░{reset}
+{d}       ░▓{y}█{o}▀                ▀{y}█{d}▓░{reset}
+{d}      ▒{g}█{y}▀                    ▀{g}█{d}▒{reset}
+{d}     ▒{c}█{g}▌                      ▐{c}█{d}▒{reset}
+{d}     ▓{b}█                        █{b}▓{reset}
+{d}     ▓{b}█                        █{b}▓{reset}
+{d}     ▒{c}█{m}▌                      ▐{c}█{d}▒{reset}
+{d}      ▒{g}█{c}▄                    ▄{g}█{d}▒{reset}
+{d}       ░▓{y}█{g}▄                ▄{y}█{d}▓░{reset}
+{d}         ░▒▓{o}██{y}▄▄      ▄▄{o}██{d}▓▒░{reset}
+{d}            ░░▒▒▓▓{r}██{d}▓▓▒▒░░{reset}
 "#,
         d = GRAY,
-        by = BRIGHT_YELLOW,
+        r = RED,
+        o = ORANGE,
+        y = YELLOW,
         g = GREEN,
+        c = CYAN,
+        b = BLUE,
+        m = MAGENTA,
         reset = RESET
     );
 }
