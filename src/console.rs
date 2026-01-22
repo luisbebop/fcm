@@ -63,6 +63,10 @@ struct ConnectRequest {
     vm: String,
     session: String,
     token: String,
+    /// Terminal width in columns
+    cols: u16,
+    /// Terminal height in rows
+    rows: u16,
 }
 
 /// Response from daemon after connect request
@@ -183,6 +187,19 @@ fn is_tty() -> bool {
     unsafe { libc::isatty(io::stdin().as_raw_fd()) == 1 }
 }
 
+/// Get terminal size (cols, rows)
+fn get_terminal_size() -> (u16, u16) {
+    let mut ws: libc::winsize = unsafe { std::mem::zeroed() };
+    let fd = io::stdout().as_raw_fd();
+
+    if unsafe { libc::ioctl(fd, libc::TIOCGWINSZ, &mut ws) } == 0 {
+        (ws.ws_col, ws.ws_row)
+    } else {
+        // Default fallback
+        (80, 24)
+    }
+}
+
 /// Connect to a console session on a VM
 ///
 /// This function:
@@ -209,12 +226,15 @@ pub fn connect(vm: &str, session: &str) -> Result<(), ConsoleError> {
 
     stream.set_nodelay(true)?;
 
-    // Load and send authentication
+    // Load and send authentication with terminal size
     let token = load_token()?;
+    let (cols, rows) = get_terminal_size();
     let request = ConnectRequest {
         vm: vm.to_string(),
         session: session.to_string(),
         token,
+        cols,
+        rows,
     };
 
     let request_json = serde_json::to_string(&request)
@@ -389,11 +409,15 @@ mod tests {
             vm: "test-vm".to_string(),
             session: "abc123".to_string(),
             token: "secret-token".to_string(),
+            cols: 120,
+            rows: 40,
         };
         let json = serde_json::to_string(&request).unwrap();
         assert!(json.contains("test-vm"));
         assert!(json.contains("abc123"));
         assert!(json.contains("secret-token"));
+        assert!(json.contains("120"));
+        assert!(json.contains("40"));
     }
 
     #[test]

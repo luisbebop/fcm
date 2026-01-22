@@ -33,7 +33,16 @@ struct TerminalConnectRequest {
     vm: String,
     session: String,
     token: String,
+    /// Terminal width (optional for backwards compat)
+    #[serde(default = "default_cols")]
+    cols: u16,
+    /// Terminal height (optional for backwards compat)
+    #[serde(default = "default_rows")]
+    rows: u16,
 }
+
+fn default_cols() -> u16 { 80 }
+fn default_rows() -> u16 { 24 }
 
 /// Terminal connect response to client
 #[derive(Debug, Serialize)]
@@ -557,8 +566,8 @@ fn handle_terminal_connection(
         }
     };
 
-    // Spawn SSH process attached to tmux session
-    let mut child = match attach_to_session(&config.ip, &session.tmux_session) {
+    // Spawn SSH process attached to tmux session with correct terminal size
+    let mut child = match attach_to_session(&config.ip, &session.tmux_session, request.cols, request.rows) {
         Ok(child) => child,
         Err(e) => {
             let _ = send_terminal_error(&mut stream, &format!("Failed to attach to session: {}", e));
