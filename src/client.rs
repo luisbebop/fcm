@@ -55,6 +55,17 @@ fn load_local_config() -> Result<LocalConfig, Box<dyn Error>> {
     Ok(config)
 }
 
+/// Get VM name from argument or .fcm config file
+pub fn resolve_vm_name(vm: Option<String>) -> Result<String, Box<dyn Error>> {
+    match vm {
+        Some(name) => Ok(name),
+        None => {
+            let config = load_local_config()?;
+            Ok(config.name)
+        }
+    }
+}
+
 /// Show VM info from local .fcm config file
 pub fn show_local_vm() -> Result<(), Box<dyn Error>> {
     let config = load_local_config()?;

@@ -37,23 +37,23 @@ enum Commands {
     Ls,
     /// Open persistent console session
     Console {
-        /// VM name or ID
-        vm: String,
+        /// VM name or ID (defaults to .fcm config)
+        vm: Option<String>,
     },
     /// Stop a running VM
     Stop {
-        /// VM name or ID
-        vm: String,
+        /// VM name or ID (defaults to .fcm config)
+        vm: Option<String>,
     },
     /// Start a stopped VM
     Start {
-        /// VM name or ID
-        vm: String,
+        /// VM name or ID (defaults to .fcm config)
+        vm: Option<String>,
     },
     /// Destroy a VM
     Destroy {
-        /// VM name or ID
-        vm: String,
+        /// VM name or ID (defaults to .fcm config)
+        vm: Option<String>,
     },
     /// Run the daemon (requires root)
     Daemon,
@@ -84,25 +84,53 @@ fn main() {
             }
         }
         Some(Commands::Console { vm }) => {
-            if let Err(e) = client::console_vm(&vm) {
+            let vm_name = match client::resolve_vm_name(vm) {
+                Ok(name) => name,
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            };
+            if let Err(e) = client::console_vm(&vm_name) {
                 eprintln!("Error opening console: {}", e);
                 std::process::exit(1);
             }
         }
         Some(Commands::Stop { vm }) => {
-            if let Err(e) = client::stop_vm(&vm) {
+            let vm_name = match client::resolve_vm_name(vm) {
+                Ok(name) => name,
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            };
+            if let Err(e) = client::stop_vm(&vm_name) {
                 eprintln!("Error stopping VM: {}", e);
                 std::process::exit(1);
             }
         }
         Some(Commands::Start { vm }) => {
-            if let Err(e) = client::start_vm(&vm) {
+            let vm_name = match client::resolve_vm_name(vm) {
+                Ok(name) => name,
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            };
+            if let Err(e) = client::start_vm(&vm_name) {
                 eprintln!("Error starting VM: {}", e);
                 std::process::exit(1);
             }
         }
         Some(Commands::Destroy { vm }) => {
-            if let Err(e) = client::destroy_vm(&vm) {
+            let vm_name = match client::resolve_vm_name(vm) {
+                Ok(name) => name,
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            };
+            if let Err(e) = client::destroy_vm(&vm_name) {
                 eprintln!("Error destroying VM: {}", e);
                 std::process::exit(1);
             }
