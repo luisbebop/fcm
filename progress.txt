@@ -600,5 +600,24 @@
 - All 89 tests pass with zero warnings
 - Commit: fe6eb83
 
+### Task 33: Fix Tmux UX Issues
+- Fixed tmux visual artifacts and sizing issues for cleaner experience
+- session.rs:
+  - Disable tmux status bar on session creation (`status off`)
+  - Set `destroy-unattached off` to keep sessions alive
+  - Resize tmux window to match client terminal before attaching
+  - Separated session creation from option setting for reliability
+- console.rs:
+  - Added get_terminal_size() to detect client terminal dimensions
+  - Send cols/rows in ConnectRequest to daemon
+- daemon.rs:
+  - Added cols/rows fields to TerminalConnectRequest
+  - Pass terminal size to attach_to_session()
+- Fixes:
+  - No more tmux status bar at bottom
+  - Terminal size matches client on connect
+- All 89 tests pass with zero warnings
+- Commit: fc088a3
+
 ## Next Tasks
 - None - all PRD features implemented
