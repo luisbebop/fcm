@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 
 mod caddy;
 mod client;
+mod console;
 mod daemon;
 mod firecracker;
 mod network;
