@@ -26,7 +26,7 @@ const LOGO: &str = r#"
 #[command(before_help = LOGO)]
 struct Cli {
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
@@ -63,43 +63,53 @@ fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Create => {
+        None => {
+            // No command given - check for .fcm file in current directory
+            if let Err(e) = client::show_local_vm() {
+                // No local config or error - show help
+                eprintln!("{}", e);
+                eprintln!();
+                eprintln!("Run 'fcm --help' for usage or 'fcm create' to create a new VM.");
+                std::process::exit(1);
+            }
+        }
+        Some(Commands::Create) => {
             if let Err(e) = client::create_vm() {
                 eprintln!("Error creating VM: {}", e);
                 std::process::exit(1);
             }
         }
-        Commands::Ls => {
+        Some(Commands::Ls) => {
             if let Err(e) = client::list_vms() {
                 eprintln!("Error listing VMs: {}", e);
                 std::process::exit(1);
             }
         }
-        Commands::Console { vm } => {
+        Some(Commands::Console { vm }) => {
             if let Err(e) = client::console_vm(&vm) {
                 eprintln!("Error opening console: {}", e);
                 std::process::exit(1);
             }
         }
-        Commands::Stop { vm } => {
+        Some(Commands::Stop { vm }) => {
             if let Err(e) = client::stop_vm(&vm) {
                 eprintln!("Error stopping VM: {}", e);
                 std::process::exit(1);
             }
         }
-        Commands::Start { vm } => {
+        Some(Commands::Start { vm }) => {
             if let Err(e) = client::start_vm(&vm) {
                 eprintln!("Error starting VM: {}", e);
                 std::process::exit(1);
             }
         }
-        Commands::Destroy { vm } => {
+        Some(Commands::Destroy { vm }) => {
             if let Err(e) = client::destroy_vm(&vm) {
                 eprintln!("Error destroying VM: {}", e);
                 std::process::exit(1);
             }
         }
-        Commands::Daemon => {
+        Some(Commands::Daemon) => {
             if let Err(e) = daemon::run() {
                 eprintln!("Error running daemon: {}", e);
                 std::process::exit(1);

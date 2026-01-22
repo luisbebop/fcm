@@ -8,6 +8,15 @@ use std::fs;
 use std::path::PathBuf;
 
 const DEFAULT_DAEMON_URL: &str = "http://127.0.0.1:7777";
+const LOCAL_CONFIG_FILE: &str = ".fcm";
+
+/// Local project config that links a directory to a VM
+#[derive(Debug, Serialize, Deserialize)]
+struct LocalConfig {
+    name: String,
+    url: Option<String>,
+    git: Option<String>,
+}
 
 /// Get the daemon URL from FCM_HOST env var or use default
 fn daemon_url() -> String {
@@ -20,6 +29,113 @@ fn daemon_url() -> String {
     } else {
         DEFAULT_DAEMON_URL.to_string()
     }
+}
+
+/// Get the path to the local config file (.fcm in current directory)
+fn local_config_path() -> PathBuf {
+    PathBuf::from(LOCAL_CONFIG_FILE)
+}
+
+/// Save local config to .fcm file in current directory
+fn save_local_config(config: &LocalConfig) -> Result<(), Box<dyn Error>> {
+    let path = local_config_path();
+    let json = serde_json::to_string_pretty(config)?;
+    fs::write(&path, json)?;
+    Ok(())
+}
+
+/// Load local config from .fcm file in current directory
+fn load_local_config() -> Result<LocalConfig, Box<dyn Error>> {
+    let path = local_config_path();
+    if !path.exists() {
+        return Err("No .fcm file found in current directory".into());
+    }
+    let content = fs::read_to_string(&path)?;
+    let config: LocalConfig = serde_json::from_str(&content)?;
+    Ok(config)
+}
+
+/// Show VM info from local .fcm config file
+pub fn show_local_vm() -> Result<(), Box<dyn Error>> {
+    let config = load_local_config()?;
+
+    // Try to get live VM info from daemon
+    let vm_info = match make_request("GET", &format!("/vms/{}", config.name), None) {
+        Ok(response) => response.into_json::<VmResponse>().ok(),
+        Err(_) => None,
+    };
+
+    println!();
+    println!(
+        "{bold}{w}  {}{reset}",
+        config.name,
+        bold = BOLD,
+        w = WHITE,
+        reset = RESET
+    );
+    println!();
+
+    // Show state if we have live info
+    if let Some(ref vm) = vm_info {
+        let state_color = if vm.state == "running" { "\x1b[92m" } else { "\x1b[93m" };
+        println!(
+            "{d}  State:{reset} {}{}{reset}",
+            state_color,
+            vm.state,
+            d = GRAY,
+            reset = RESET
+        );
+    }
+
+    if let Some(url) = &config.url {
+        println!(
+            "{d}  URL:{reset}   {b}{}{reset}",
+            url,
+            d = GRAY,
+            b = BLUE,
+            reset = RESET
+        );
+    }
+
+    if let Some(git) = &config.git {
+        println!(
+            "{d}  Git:{reset}   {b}{}{reset}",
+            git,
+            d = GRAY,
+            b = BLUE,
+            reset = RESET
+        );
+    }
+
+    // Show resources if we have live info
+    if let Some(ref vm) = vm_info {
+        println!(
+            "{d}  vCPU:{reset}  {}",
+            vm.vcpu_count,
+            d = GRAY,
+            reset = RESET
+        );
+        println!(
+            "{d}  Mem:{reset}   {}MB",
+            vm.mem_size_mib,
+            d = GRAY,
+            reset = RESET
+        );
+        println!(
+            "{d}  Disk:{reset}  {}MB/{}MB",
+            vm.disk_used_mb, vm.disk_max_mb,
+            d = GRAY,
+            reset = RESET
+        );
+    }
+
+    println!();
+    println!("{d}  Commands:{reset}", d = GRAY, reset = RESET);
+    println!("    {w}fcm console {}{reset}  {d}# open terminal{reset}", config.name, w = WHITE, d = GRAY, reset = RESET);
+    println!("    {w}git push{reset}             {d}# deploy{reset}", w = WHITE, d = GRAY, reset = RESET);
+    println!();
+
+    Ok(())
 }
 
 /// Request to create a VM with SSH public key
@@ -237,6 +353,16 @@ pub fn create_vm() -> Result<(), Box<dyn Error>> {
 
     let response = make_request("POST", "/vms", Some(body))?;
     let vm: VmResponse = response.into_json()?;
+
+    // Save local .fcm config file
+    let local_config = LocalConfig {
+        name: vm.name.clone(),
+        url: vm.expose.as_ref().map(|e| format!("https://{}", e.domain)),
+        git: vm.git_url.clone(),
+    };
+    if let Err(e) = save_local_config(&local_config) {
+        eprintln!("Warning: Could not save .fcm config: {}", e);
+    }
 
     // Print logo ASCII art
     print_logo();
@@ -503,5 +629,36 @@ mod tests {
         env::set_var("FCM_HOST", "https://myserver.example.com:7777");
         assert_eq!(daemon_url(), "https://myserver.example.com:7777");
         env::remove_var("FCM_HOST");
+    }
+
+    #[test]
+    fn test_local_config_serialization() {
+        let config = LocalConfig {
+            name: "cosmic-nova".to_string(),
+            url: Some("https://cosmic-nova.64-34-93-45.sslip.io".to_string()),
+            git: Some("root@64.34.93.45:cosmic-nova.git".to_string()),
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("cosmic-nova"));
+        assert!(json.contains("sslip.io"));
+    }
+
+    #[test]
+    fn test_local_config_deserialization() {
+        let json = r#"{
+            "name": "test-vm",
+            "url": "https://test-vm.example.com",
+            "git": "root@example.com:test-vm.git"
+        }"#;
+        let config: LocalConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.name, "test-vm");
+        assert_eq!(config.url, Some("https://test-vm.example.com".to_string()));
+        assert_eq!(config.git, Some("root@example.com:test-vm.git".to_string()));
+    }
+
+    #[test]
+    fn test_local_config_path() {
+        let path = local_config_path();
+        assert_eq!(path.to_str().unwrap(), ".fcm");
     }
 }
