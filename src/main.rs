@@ -12,7 +12,7 @@ mod vm;
 
 #[derive(Parser)]
 #[command(name = "fcm")]
-#[command(about = "Simple Firecracker VM manager")]
+#[command(about = "Firecracker VM manager")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
