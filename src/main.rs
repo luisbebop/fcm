@@ -10,9 +10,20 @@ mod network;
 mod session;
 mod vm;
 
+const LOGO: &str = r#"
+   ██████╗ ██████╗███╗   ███╗
+   ██╔═══╝██╔════╝████╗ ████║
+   █████╗ ██║     ██╔████╔██║
+   ██╔══╝ ██║     ██║╚██╔╝██║
+   ██║    ╚██████╗██║ ╚═╝ ██║
+   ╚═╝     ╚═════╝╚═╝     ╚═╝
+      ▄▄▄▄  ░▒▓█ FIRE █▓▒░  ▄▄▄▄
+"#;
+
 #[derive(Parser)]
 #[command(name = "fcm")]
 #[command(about = "Firecracker VM manager")]
+#[command(before_help = LOGO)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
