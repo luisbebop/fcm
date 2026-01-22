@@ -163,14 +163,9 @@ fn find_ssh_public_key() -> Option<String> {
 }
 
 /// ANSI color codes
-const RED: &str = "\x1b[91m";
-const ORANGE: &str = "\x1b[38;5;208m";
-const YELLOW: &str = "\x1b[93m";
-const GREEN: &str = "\x1b[92m";
-const CYAN: &str = "\x1b[96m";
-const BLUE: &str = "\x1b[94m";
-const MAGENTA: &str = "\x1b[95m";
+const WHITE: &str = "\x1b[97m";
 const GRAY: &str = "\x1b[90m";
+const BLUE: &str = "\x1b[94m";
 const RESET: &str = "\x1b[0m";
 const BOLD: &str = "\x1b[1m";
 
@@ -178,27 +173,21 @@ const BOLD: &str = "\x1b[1m";
 fn print_logo() {
     println!(
         r#"
-{d}            ░░▒▒▓▓{r}██{d}▓▓▒▒░░{reset}
-{d}         ░▒▓{o}██{r}▀▀      ▀▀{o}██{d}▓▒░{reset}
-{d}       ░▓{y}█{o}▀                ▀{y}█{d}▓░{reset}
-{d}      ▒{g}█{y}▀                    ▀{g}█{d}▒{reset}
-{d}     ▒{c}█{g}▌                      ▐{c}█{d}▒{reset}
-{d}     ▓{b}█                        █{b}▓{reset}
-{d}     ▓{b}█                        █{b}▓{reset}
-{d}     ▒{c}█{m}▌                      ▐{c}█{d}▒{reset}
-{d}      ▒{g}█{c}▄                    ▄{g}█{d}▒{reset}
-{d}       ░▓{y}█{g}▄                ▄{y}█{d}▓░{reset}
-{d}         ░▒▓{o}██{y}▄▄      ▄▄{o}██{d}▓▒░{reset}
-{d}            ░░▒▒▓▓{r}██{d}▓▓▒▒░░{reset}
+{d}            ░░▒▒▓▓{w}██{d}▓▓▒▒░░{reset}
+{d}         ░▒▓{w}██▀▀      ▀▀██{d}▓▒░{reset}
+{d}       ░▓{w}█▀                ▀█{d}▓░{reset}
+{d}      ▒{w}█▀                    ▀█{d}▒{reset}
+{d}     ▒{w}█▌                      ▐█{d}▒{reset}
+{d}     ▓{w}█                        █{d}▓{reset}
+{d}     ▓{w}█                        █{d}▓{reset}
+{d}     ▒{w}█▌                      ▐█{d}▒{reset}
+{d}      ▒{w}█▄                    ▄█{d}▒{reset}
+{d}       ░▓{w}█▄                ▄█{d}▓░{reset}
+{d}         ░▒▓{w}██▄▄      ▄▄██{d}▓▒░{reset}
+{d}            ░░▒▒▓▓{w}██{d}▓▓▒▒░░{reset}
 "#,
         d = GRAY,
-        r = RED,
-        o = ORANGE,
-        y = YELLOW,
-        g = GREEN,
-        c = CYAN,
-        b = BLUE,
-        m = MAGENTA,
+        w = WHITE,
         reset = RESET
     );
 }
@@ -221,59 +210,59 @@ pub fn create_vm() -> Result<(), Box<dyn Error>> {
 
     // Print VM info
     println!(
-        "{bold}{green}  VM created: {yellow}{}{reset}",
+        "{bold}{w}  VM created: {b}{}{reset}",
         vm.name,
         bold = BOLD,
-        green = GREEN,
-        yellow = YELLOW,
+        w = WHITE,
+        b = BLUE,
         reset = RESET
     );
     println!();
 
     if let Some(expose) = &vm.expose {
         println!(
-            "{gray}  URL:{reset}  {green}https://{}{reset}",
+            "{d}  URL:{reset}  {b}https://{}{reset}",
             expose.domain,
-            gray = GRAY,
-            green = GREEN,
+            d = GRAY,
+            b = BLUE,
             reset = RESET
         );
     }
 
     if let Some(git_url) = &vm.git_url {
         println!(
-            "{gray}  Git:{reset}  {yellow}{}{reset}",
+            "{d}  Git:{reset}  {b}{}{reset}",
             git_url,
-            gray = GRAY,
-            yellow = YELLOW,
+            d = GRAY,
+            b = BLUE,
             reset = RESET
         );
     }
 
     println!();
-    println!("{bold}  Quick Start:{reset}", bold = BOLD, reset = RESET);
+    println!("{bold}{w}  Quick Start:{reset}", bold = BOLD, w = WHITE, reset = RESET);
     println!();
-    println!("{gray}  # Add the remote to your project{reset}", gray = GRAY, reset = RESET);
+    println!("{d}  # Add the remote to your project{reset}", d = GRAY, reset = RESET);
     if let Some(git_url) = &vm.git_url {
         println!(
-            "  {green}git remote add fcm {}{reset}",
+            "  {w}git remote add fcm {}{reset}",
             git_url,
-            green = GREEN,
+            w = WHITE,
             reset = RESET
         );
     }
     println!();
-    println!("{gray}  # Create a simple Procfile{reset}", gray = GRAY, reset = RESET);
+    println!("{d}  # Create a simple Procfile{reset}", d = GRAY, reset = RESET);
     println!(
-        "  {yellow}echo 'web: python3 -m http.server $PORT' > Procfile{reset}",
-        yellow = YELLOW,
+        "  {w}echo 'web: python3 -m http.server $PORT' > Procfile{reset}",
+        w = WHITE,
         reset = RESET
     );
     println!();
-    println!("{gray}  # Deploy!{reset}", gray = GRAY, reset = RESET);
+    println!("{d}  # Deploy!{reset}", d = GRAY, reset = RESET);
     println!(
-        "  {green}git add . && git commit -m 'deploy' && git push fcm main{reset}",
-        green = GREEN,
+        "  {w}git add . && git commit -m 'deploy' && git push fcm main{reset}",
+        w = WHITE,
         reset = RESET
     );
     println!();
