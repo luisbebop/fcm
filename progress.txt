@@ -512,5 +512,44 @@
 - All 93 tests pass with zero warnings
 - Commit: a1099a5
 
+### Task 28: Fix Session SSH Authentication with sshpass
+- Fixed session management SSH commands to use sshpass for password authentication
+- The daemon uses SSH to create/list/kill tmux sessions on VMs
+- VMs use root:root password auth, but session.rs was using plain ssh without credentials
+- Updated all SSH functions in session.rs to use sshpass:
+  - create_tmux_session(): creates tmux session on VM
+  - list_tmux_sessions(): lists active tmux sessions on VM
+  - kill_tmux_session(): terminates tmux session on VM
+  - attach_to_session(): spawns SSH process attached to tmux session
+- Fixed sync_sessions() bug:
+  - Previously used unwrap_or_default() which returned empty Vec on SSH error
+  - This caused all sessions to be removed when SSH temporarily failed
+  - Now skips sync entirely if list_tmux_sessions() fails (preserves existing sessions)
+- Tested all console commands:
+  - `fcm sessions <vm>` - lists active sessions correctly
+  - `fcm console <vm>` - creates session and connects (non-TTY error expected in test)
+  - `fcm attach <vm> <session-id>` - attaches to existing session
+- All 93 tests pass with zero warnings
+- Commit: d78521c
+
+### Task 29: Remove Legacy SSH Command (Not in PRD)
+- The PRD specifies console/sessions/attach commands for VM access, not a bare ssh command
+- With persistent console sessions fully implemented, the legacy ssh command is no longer needed
+- main.rs:
+  - Removed Ssh variant from Commands enum
+  - Removed Commands::Ssh match arm
+- client.rs:
+  - Removed ssh_vm() function
+  - Removed get_jump_host() function (only used by ssh_vm)
+  - Removed SshInfoResponse struct
+  - Removed std::process::Command import
+  - Removed 5 related tests (ssh_info_deserialization, 4 get_jump_host tests)
+- daemon.rs:
+  - Removed SshInfoResponse struct
+  - Removed handle_ssh_info() function
+  - Removed /vms/{id}/ssh route from routing table
+- All 88 tests pass with zero warnings
+- Commit: 0a44c31
+
 ## Next Tasks
-- None - console implementation complete
+- None - all PRD features implemented
