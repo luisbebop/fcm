@@ -114,7 +114,7 @@ impl VmConfig {
 
     /// Get the actual disk space used by the rootfs (in MB)
     /// Uses du to get actual disk usage for sparse files
-    pub fn disk_size_mb(&self) -> u64 {
+    pub fn disk_used_mb(&self) -> u64 {
         let rootfs = self.rootfs_path();
         if !rootfs.exists() {
             return 0;
@@ -135,6 +135,18 @@ impl VmConfig {
             }
             _ => 0,
         }
+    }
+
+    /// Get the maximum disk size (apparent size) of the rootfs (in MB)
+    pub fn disk_max_mb(&self) -> u64 {
+        let rootfs = self.rootfs_path();
+        if !rootfs.exists() {
+            return 0;
+        }
+        // Use file metadata to get apparent size
+        fs::metadata(&rootfs)
+            .map(|m| m.len() / (1024 * 1024))
+            .unwrap_or(0)
     }
 
     /// Save config to disk

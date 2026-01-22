@@ -61,7 +61,8 @@ pub struct VmResponse {
     pub state: String,
     pub vcpu_count: u8,
     pub mem_size_mib: u32,
-    pub disk_size_mb: u64,
+    pub disk_used_mb: u64,
+    pub disk_max_mb: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expose: Option<ExposeResponse>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -96,7 +97,8 @@ impl From<&VmConfig> for VmResponse {
             },
             vcpu_count: config.vcpu_count,
             mem_size_mib: config.mem_size_mib,
-            disk_size_mb: config.disk_size_mb(),
+            disk_used_mb: config.disk_used_mb(),
+            disk_max_mb: config.disk_max_mb(),
             expose: config.expose.as_ref().map(|e| ExposeResponse {
                 port: e.port,
                 domain: e.domain.clone(),
