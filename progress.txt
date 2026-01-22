@@ -495,8 +495,22 @@
   - client.rs: vm_id field in SessionResponse (JSON completeness, not displayed)
   - session.rs: VmNotAvailable variant (matched but not constructed)
   - session.rs: SshError variant (matched but not constructed)
-  - session.rs: remove_vm_sessions() (not wired to VM stop/destroy yet)
 - Commit: cfb609d
+
+### Task 27: Wire Session Cleanup to VM Stop/Destroy
+- Sessions are now automatically cleaned up when a VM is stopped or destroyed
+- Updated handle_stop_vm() in daemon.rs:
+  - Added session_manager parameter
+  - Calls remove_vm_sessions() after successfully stopping VM
+- Updated handle_destroy_vm() in daemon.rs:
+  - Added session_manager parameter
+  - Calls remove_vm_sessions() after successfully destroying VM
+- Updated routing in handle_request() to pass session_manager to:
+  - handle_stop_vm() for POST /vms/{id}/stop
+  - handle_destroy_vm() for DELETE /vms/{id}
+- Removed #[allow(dead_code)] from remove_vm_sessions() in session.rs
+- All 93 tests pass with zero warnings
+- Commit: a1099a5
 
 ## Next Tasks
 - None - console implementation complete
