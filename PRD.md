@@ -162,30 +162,96 @@ DELETE /vms/{id}/sessions/{session-id} # kill a session
 - tmux installed in base rootfs
 - ssh access from daemon to vm (already works via internal network)
 
+## procfile deployment
+
+heroku-style git push deployment for VMs.
+
+### how it works
+
+1. each VM gets a git repo on the fcm host at `/root/<vm-name>.git`
+2. `fcm create` output shows git URL: `root@<host>:<vm-name>.git`
+3. user pushes code: `git push fcm main`
+4. post-receive hook syncs code to VM's `/app` directory
+5. auto-detects dependencies (Gemfile, requirements.txt, package.json)
+6. runs install commands (bundle install, pip install, npm install)
+7. parses Procfile and starts web process with `PORT=8000`
+
+### procfile format
+
+```
+web: <command>
+```
+
+examples:
+- `web: python3 app.py`
+- `web: bundle exec rails server -p $PORT -b 0.0.0.0`
+- `web: node index.js`
+
+### architecture
+
+```
+User's Machine              FCM Host                          VM (172.16.0.x)
++------------+             +-------------------------+        +---------------+
+|            | git push    | /root/<vm-name>.git     |        |               |
+| local repo |------------>| (bare repo)             |  scp   | /app          |
+|            | SSH:22      |         |               |------->| (code)        |
++------------+             |  post-receive hook      |  ssh   |               |
+                           |  (syncs + deploys)      |------->| fcm-deploy    |
+                           +-------------------------+        +---------------+
+```
+
+### vm scripts
+
+- `fcm-deploy`: runs on VM after code sync, installs deps, restarts web
+- `fcm-runner`: process manager for web process (start/stop/restart)
+
+### usage
+
+```bash
+$ fcm create
+VM created: cosmic-nova
+  Git: root@myserver.com:cosmic-nova.git
+
+$ git remote add fcm root@myserver.com:cosmic-nova.git
+$ git push fcm main
+remote: -----> Deploying to cosmic-nova...
+remote: -----> Detected Python (requirements.txt)
+remote: -----> Running pip install...
+remote: -----> Starting: python app.py
+remote: -----> Live at https://cosmic-nova.64-34-93-45.sslip.io
+```
+
 ## base image
 
 create new alpine-based rootfs with:
-- openssh-server (with root login enabled)
+- dropbear (lightweight ssh server for daemon to connect via tmux)
 - tmux (for persistent console sessions)
-- ruby 4.0 + bundler (latest stable: 4.0.1)
-- python 3.14 + pip (latest stable: 3.14.2)
-- minimal init script (same pattern as existing alpine image)
+- ruby 4.0 + bundler (latest stable: 4.0.1) for heroku-style deployments
+- python 3.14 + pip (latest stable: 3.14.2) for heroku-style deployments
+- rng-tools (for entropy initialization in firecracker)
+- minimal init script
 
 dockerfile:
 ```dockerfile
 FROM alpine:edge
+
 RUN apk add --no-cache \
-    openssh ruby ruby-bundler python3 py3-pip \
-    tmux curl bash iproute2
-# configure ssh
-RUN ssh-keygen -A && \
-    echo "PermitRootLogin yes" >> /etc/ssh/sshd_config && \
+    dropbear dropbear-scp ruby ruby-bundler python3 py3-pip \
+    tmux curl bash iproute2 rng-tools
+
+# Configure dropbear SSH and set root password
+RUN mkdir -p /etc/dropbear && \
+    dropbearkey -t rsa -f /etc/dropbear/dropbear_rsa_host_key && \
+    dropbearkey -t ecdsa -f /etc/dropbear/dropbear_ecdsa_host_key && \
+    dropbearkey -t ed25519 -f /etc/dropbear/dropbear_ed25519_host_key && \
     echo "root:root" | chpasswd
-# copy init script (configures network from cmdline, starts sshd)
-COPY init /sbin/init
+
+# Copy init script to temp location first, then move it
+COPY init /tmp/init
+RUN chmod +x /tmp/init && mv /tmp/init /sbin/init
 ```
 
-init script starts sshd and listens on port 8000 placeholder.
+init script starts dropbear ssh and a simple http server on port 8000 (shows "hello from fcm VM").
 
 build: `docker build + docker export + dd + mkfs.ext4 + tar extract`
 
