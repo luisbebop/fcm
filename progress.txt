@@ -425,6 +425,34 @@
 - All 89 tests pass with zero warnings
 - Commit: 5d50657
 
+### Task 24: Terminal Server on Port 7778 in Daemon
+- Added terminal server TCP listener on port 7778 for persistent console sessions
+- Terminal server runs in a separate thread alongside the HTTP server
+- TerminalConnectRequest struct for client authentication protocol:
+  - vm: VM ID or name
+  - session: session ID to connect to
+  - token: auth token for daemon
+- TerminalConnectResponse struct for server responses (success/error)
+- handle_terminal_connection() function:
+  - Reads JSON connect request with newline delimiter
+  - Validates auth token
+  - Looks up VM and validates it's running
+  - Looks up session and verifies it belongs to the VM
+  - Spawns SSH process attached to tmux session using attach_to_session()
+  - Sends success response, then proxies I/O
+- send_terminal_error() and send_terminal_response() helpers
+- proxy_terminal_io() function:
+  - Spawns thread to read from child stdout and write to client
+  - Main thread reads from client and writes to child stdin
+  - Handles EOF and connection drops gracefully
+- run_terminal_server() function:
+  - Binds to 0.0.0.0:7778
+  - Accepts connections in a loop
+  - Spawns thread for each connection
+- Updated daemon's run() to spawn terminal server thread
+- 4 unit tests for terminal protocol types
+- All 93 tests pass with zero warnings
+- Commit: b1eaae8
+
 ## Next Tasks
-- Task 24: Terminal server on port 7778 in daemon
 - Task 25: Update CLI with console/sessions/attach commands
