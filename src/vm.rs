@@ -520,7 +520,12 @@ pub fn create_vm(name: Option<String>, expose_port: Option<u16>, ssh_public_key:
     }
 
     // Create git repository for Procfile deployments
-    if let Err(e) = git::create_repo(&config.name, &config.ip) {
+    let git_domain = config
+        .expose
+        .as_ref()
+        .map(|e| e.domain.clone())
+        .unwrap_or_else(|| format!("{}.sslip.io", config.name));
+    if let Err(e) = git::create_repo(&config.name, &config.ip, &git_domain) {
         eprintln!("Warning: Failed to create git repo: {}", e);
         // Don't fail the VM creation for this
     }

@@ -40,7 +40,7 @@ pub fn repo_path(vm_name: &str) -> PathBuf {
 }
 
 /// Create a bare git repository for a VM with a post-receive hook
-pub fn create_repo(vm_name: &str, vm_ip: &str) -> Result<PathBuf, GitError> {
+pub fn create_repo(vm_name: &str, vm_ip: &str, domain: &str) -> Result<PathBuf, GitError> {
     let path = repo_path(vm_name);
 
     // Create bare repo using git init --bare
@@ -61,7 +61,7 @@ pub fn create_repo(vm_name: &str, vm_ip: &str) -> Result<PathBuf, GitError> {
 
     // Create post-receive hook
     let hook_path = hooks_dir.join("post-receive");
-    let hook_content = generate_post_receive_hook(vm_name, vm_ip);
+    let hook_content = generate_post_receive_hook(vm_name, vm_ip, domain);
     fs::write(&hook_path, hook_content)?;
 
     // Make hook executable
@@ -89,20 +89,21 @@ pub fn repo_exists(vm_name: &str) -> bool {
 }
 
 /// Generate the post-receive hook script
-fn generate_post_receive_hook(vm_name: &str, vm_ip: &str) -> String {
+fn generate_post_receive_hook(vm_name: &str, vm_ip: &str, domain: &str) -> String {
     format!(
         r#"#!/bin/bash
 # FCM post-receive hook for {vm_name}
 # This hook deploys code to the VM after git push
 
-set -e
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 VM_NAME="{vm_name}"
 VM_IP="{vm_ip}"
+DOMAIN="{domain}"
 WORK_TREE="/tmp/fcm-deploy-$VM_NAME"
 APP_DIR="/app"
 
+echo ""
 echo "-----> Deploying to $VM_NAME..."
 
 # Create temporary work tree
@@ -120,19 +121,29 @@ done
 
 # Sync code to VM
 echo "-----> Syncing code to VM..."
-cd "$WORK_TREE" && tar cf - . | sshpass -p "root" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@$VM_IP" "cd $APP_DIR && tar xf -"
+cd "$WORK_TREE" && tar cf - . | sshpass -p "root" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@$VM_IP" "cd $APP_DIR && tar xf -" 2>/dev/null
 
 # Run deployment on VM
 echo "-----> Running deployment..."
-sshpass -p "root" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@$VM_IP" "/usr/local/bin/fcm-deploy"
-
-# Clean up
-rm -rf "$WORK_TREE"
-
-echo "-----> Deployment complete!"
+if sshpass -p "root" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@$VM_IP" "/usr/local/bin/fcm-deploy" 2>/dev/null; then
+    # Clean up
+    rm -rf "$WORK_TREE"
+    echo ""
+    echo "-----> Deploy successful!"
+    echo ""
+    echo "       https://$DOMAIN"
+    echo ""
+else
+    rm -rf "$WORK_TREE"
+    echo ""
+    echo "-----> Deploy failed!"
+    echo ""
+    exit 1
+fi
 "#,
         vm_name = vm_name,
-        vm_ip = vm_ip
+        vm_ip = vm_ip,
+        domain = domain
     )
 }
 
@@ -207,11 +218,15 @@ mod tests {
 
     #[test]
     fn test_generate_post_receive_hook() {
-        let hook = generate_post_receive_hook("test-vm", "172.16.0.50");
+        let hook = generate_post_receive_hook("test-vm", "172.16.0.50", "test-vm.64-34-93-45.sslip.io");
         assert!(hook.contains("test-vm"));
         assert!(hook.contains("172.16.0.50"));
         assert!(hook.contains("fcm-deploy"));
         assert!(hook.contains("sshpass"));
+        assert!(hook.contains("Deploy successful!"));
+        assert!(hook.contains("Deploy failed!"));
+        assert!(hook.contains(r#"DOMAIN="test-vm.64-34-93-45.sslip.io""#));
+        assert!(hook.contains("https://$DOMAIN"));
     }
 
     #[test]
