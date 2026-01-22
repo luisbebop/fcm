@@ -270,7 +270,7 @@ pub fn create_vm() -> Result<(), Box<dyn Error>> {
     println!("{bold}{w}  Quick Start:{reset}", bold = BOLD, w = WHITE, reset = RESET);
     println!();
     println!("{d}  # Initialize and deploy{reset}", d = GRAY, reset = RESET);
-    println!("  {w}mkdir my-app && cd my-app && git init{reset}", w = WHITE, reset = RESET);
+    println!("  {w}git init{reset}", w = WHITE, reset = RESET);
     println!("  {w}echo '<h1>{}</h1>' > index.html{reset}", koan, w = WHITE, reset = RESET);
     println!("  {w}echo 'web: python3 -m http.server $PORT' > Procfile{reset}", w = WHITE, reset = RESET);
     if let Some(git_url) = &vm.git_url {
