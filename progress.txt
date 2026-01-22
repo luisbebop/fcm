@@ -657,5 +657,48 @@
 - All 88 tests pass with zero warnings
 - Commit: 066296e
 
+### Task 37: Procfile Deployment Support (Git Push Deployment)
+- Implemented heroku-style git push deployment as specified in PRD
+- Created git.rs module for git repository management:
+  - repo_path(): returns path to VM's bare git repo at /root/<vm-name>.git
+  - create_repo(): creates bare git repo with post-receive hook
+  - delete_repo(): removes git repo when VM is destroyed
+  - repo_exists(): checks if git repo exists for a VM
+  - get_clone_url(): generates git clone URL for VM
+  - generate_post_receive_hook(): creates hook that syncs code and runs deploy
+- Post-receive hook functionality:
+  - Checks out pushed code to temp directory
+  - Syncs code to VM's /app directory via scp with sshpass
+  - Runs fcm-deploy script on VM via ssh
+  - Supports main and master branches
+- Created fcm-deploy script (runs on VM):
+  - Detects Ruby (Gemfile) and runs bundle install
+  - Detects Python (requirements.txt) and runs pip install
+  - Detects Node.js (package.json) and runs npm install
+  - Parses Procfile for web process command
+  - Starts/restarts web process using fcm-runner
+- Created fcm-runner script (process manager on VM):
+  - start/stop/restart/status commands
+  - Manages PID file at /var/run/fcm-web.pid
+  - Logs to /var/log/fcm-web.log
+  - Exports PORT=8000 environment variable
+- Updated vm.rs:
+  - create_vm() now creates git repo after VM is running
+  - destroy_vm() now deletes git repo when VM is destroyed
+  - Added GitError variant to VmError enum
+- Updated daemon.rs:
+  - VmResponse now includes optional git_url field
+  - Git URL is computed from VM name and server IP
+- Updated client.rs:
+  - VmResponse includes git_url field
+  - print_vm() displays git URL when present
+- Updated rootfs/Dockerfile:
+  - Added nodejs and npm packages for Node.js apps
+  - Added git package
+  - Added fcm-deploy and fcm-runner scripts to /usr/local/bin
+  - Created /app directory for deployments
+- All 93 tests pass (single-threaded due to env var isolation)
+- Commit: 6a3a3eb
+
 ## Next Tasks
 - None - all PRD features implemented
