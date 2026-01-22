@@ -487,6 +487,16 @@
   - connect() function
 - All 93 tests pass with zero warnings
 - Commit: 21be38e
+- Additional cleanup in session.rs:
+  - Removed dead_code from get_session() - used in daemon.rs:550
+  - Removed dead_code from attach_to_session() - used in daemon.rs:571
+  - Updated comments on VmNotAvailable and SshError variants (still unused)
+- Remaining legitimate dead_code annotations:
+  - client.rs: vm_id field in SessionResponse (JSON completeness, not displayed)
+  - session.rs: VmNotAvailable variant (matched but not constructed)
+  - session.rs: SshError variant (matched but not constructed)
+  - session.rs: remove_vm_sessions() (not wired to VM stop/destroy yet)
+- Commit: cfb609d
 
 ## Next Tasks
 - None - console implementation complete
