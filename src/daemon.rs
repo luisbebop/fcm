@@ -272,9 +272,20 @@ fn handle_ssh_info(request: Request, vm_id: &str) -> Result<(), Box<dyn Error>> 
 }
 
 /// Handle POST /vms/{id}/stop - stop a VM
-fn handle_stop_vm(request: Request, vm_id: &str) -> Result<(), Box<dyn Error>> {
+fn handle_stop_vm(
+    request: Request,
+    vm_id: &str,
+    session_manager: &SessionManager,
+) -> Result<(), Box<dyn Error>> {
+    // Get the VM ID before stopping (for session cleanup)
+    let vm_config = vm::find_vm(vm_id).ok();
+
     match vm::stop_vm(vm_id) {
         Ok(config) => {
+            // Clean up sessions for this VM
+            if let Some(ref vc) = vm_config {
+                session_manager.remove_vm_sessions(&vc.id);
+            }
             let response = VmResponse::from(&config);
             send_json_response(request, 200, &response)
         }
@@ -309,9 +320,20 @@ fn handle_start_vm(request: Request, vm_id: &str) -> Result<(), Box<dyn Error>> 
 }
 
 /// Handle DELETE /vms/{id} - destroy a VM
-fn handle_destroy_vm(request: Request, vm_id: &str) -> Result<(), Box<dyn Error>> {
+fn handle_destroy_vm(
+    request: Request,
+    vm_id: &str,
+    session_manager: &SessionManager,
+) -> Result<(), Box<dyn Error>> {
+    // Get the VM ID before destroying (for session cleanup)
+    let vm_config = vm::find_vm(vm_id).ok();
+
     match vm::destroy_vm(vm_id) {
         Ok(()) => {
+            // Clean up sessions for this VM
+            if let Some(ref vc) = vm_config {
+                session_manager.remove_vm_sessions(&vc.id);
+            }
             send_json_response(request, 200, &serde_json::json!({"deleted": true}))
         }
         Err(e) => {
@@ -456,7 +478,7 @@ fn handle_request(
         (Method::Post, path) if path.starts_with("/vms/") => {
             let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
             match parts.as_slice() {
-                ["vms", vm_id, "stop"] => handle_stop_vm(request, vm_id),
+                ["vms", vm_id, "stop"] => handle_stop_vm(request, vm_id, session_manager),
                 ["vms", vm_id, "start"] => handle_start_vm(request, vm_id),
                 ["vms", vm_id, "sessions"] => {
                     handle_create_session(request, vm_id, session_manager)
@@ -467,7 +489,7 @@ fn handle_request(
         (Method::Delete, path) if path.starts_with("/vms/") => {
             let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
             match parts.as_slice() {
-                ["vms", vm_id] => handle_destroy_vm(request, vm_id),
+                ["vms", vm_id] => handle_destroy_vm(request, vm_id, session_manager),
                 ["vms", vm_id, "sessions", session_id] => {
                     handle_kill_session(request, vm_id, session_id, session_manager)
                 }

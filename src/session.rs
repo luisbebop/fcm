@@ -174,7 +174,6 @@ impl SessionManager {
     }
 
     /// Remove all sessions for a VM (called when VM is stopped/destroyed)
-    #[allow(dead_code)] // Will be used when VM stop/destroy cleans up sessions
     pub fn remove_vm_sessions(&self, vm_id: &str) {
         let mut sessions = self.sessions.lock().unwrap();
         sessions.retain(|_, s| s.vm_id != vm_id);
