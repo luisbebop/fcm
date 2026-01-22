@@ -746,5 +746,16 @@
   - Restarted ssh service
 - Git push now works without password using user's SSH key
 
+### Task 41: Add GIT Column to ls Output
+- Added GIT column to `fcm ls` command output
+- Shows git repo address for each VM (e.g., root@64.34.93.45:vm-name.git)
+- Makes it easy to find the correct remote URL for git push deployment
+- Updated client.rs list_vms() function:
+  - Added GIT to header row
+  - Widened separator line to 120 chars
+  - Added git_url field to each VM row
+- All 94 tests pass with zero warnings
+- Commit: 807f306
+
 ## Next Tasks
 - None - all PRD features implemented
