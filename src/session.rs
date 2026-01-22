@@ -278,32 +278,29 @@ fn create_tmux_session(vm_ip: &str, session_name: &str) -> Result<(), SessionErr
         }
     }
 
-    // Configure session to hide tmux UI artifacts:
+    // Configure session for clean UX:
     // - status off: no status bar at bottom
     // - destroy-unattached off: keep session when client disconnects
-    let _ = Command::new("sshpass")
-        .args([
-            "-p", "root",
-            "ssh",
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
-            "-o", "ConnectTimeout=5",
-            &format!("root@{}", vm_ip),
-            "tmux", "set-option", "-t", session_name, "status", "off",
-        ])
-        .output();
+    // - mouse on: enable mouse scroll and selection
+    let options = [
+        ("status", "off"),
+        ("destroy-unattached", "off"),
+        ("mouse", "on"),
+    ];
 
-    let _ = Command::new("sshpass")
-        .args([
-            "-p", "root",
-            "ssh",
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
-            "-o", "ConnectTimeout=5",
-            &format!("root@{}", vm_ip),
-            "tmux", "set-option", "-t", session_name, "destroy-unattached", "off",
-        ])
-        .output();
+    for (option, value) in options {
+        let _ = Command::new("sshpass")
+            .args([
+                "-p", "root",
+                "ssh",
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "UserKnownHostsFile=/dev/null",
+                "-o", "ConnectTimeout=5",
+                &format!("root@{}", vm_ip),
+                "tmux", "set-option", "-t", session_name, option, value,
+            ])
+            .output();
+    }
 
     Ok(())
 }
