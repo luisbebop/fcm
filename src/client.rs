@@ -32,8 +32,10 @@ struct CreateVmRequest {
 /// Response for VM operations
 #[derive(Debug, Deserialize)]
 struct VmResponse {
+    #[allow(dead_code)]
     id: String,
     name: String,
+    #[allow(dead_code)]
     ip: String,
     state: String,
     expose: Option<ExposeResponse>,
@@ -42,6 +44,7 @@ struct VmResponse {
 
 #[derive(Debug, Deserialize)]
 struct ExposeResponse {
+    #[allow(dead_code)]
     port: u16,
     domain: String,
 }
@@ -294,10 +297,10 @@ pub fn list_vms() -> Result<(), Box<dyn Error>> {
 
     // Print header
     println!(
-        "{:<12} {:<20} {:<16} {:<10} {:<36} GIT",
-        "ID", "NAME", "IP", "STATE", "DOMAIN"
+        "{:<20} {:<10} {:<40} {}",
+        "NAME", "STATE", "DOMAIN", "GIT"
     );
-    println!("{}", "-".repeat(120));
+    println!("{}", "-".repeat(110));
 
     // Print each VM
     for vm in vms {
@@ -308,8 +311,8 @@ pub fn list_vms() -> Result<(), Box<dyn Error>> {
             .unwrap_or("-");
         let git_url = vm.git_url.as_deref().unwrap_or("-");
         println!(
-            "{:<12} {:<20} {:<16} {:<10} {:<36} {}",
-            vm.id, vm.name, vm.ip, vm.state, domain, git_url
+            "{:<20} {:<10} {:<40} {}",
+            vm.name, vm.state, domain, git_url
         );
     }
 
@@ -361,12 +364,9 @@ pub fn console_vm(vm: &str) -> Result<(), Box<dyn Error>> {
 
 /// Print VM details
 fn print_vm(vm: &VmResponse) {
-    println!("  ID:    {}", vm.id);
     println!("  Name:  {}", vm.name);
-    println!("  IP:    {}", vm.ip);
     println!("  State: {}", vm.state);
     if let Some(expose) = &vm.expose {
-        println!("  Port:  {}", expose.port);
         println!("  URL:   https://{}", expose.domain);
     }
     if let Some(git_url) = &vm.git_url {
