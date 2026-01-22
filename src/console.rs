@@ -195,7 +195,9 @@ pub fn connect(vm: &str, session: &str) -> Result<(), ConsoleError> {
     let host = terminal_host();
     let addr = format!("{}:{}", host, DEFAULT_TERMINAL_PORT);
 
-    println!("Connecting to {}...", addr);
+    // Simple output - just show VM name, hide technical details
+    print!("Connecting to {}...", vm);
+    io::stdout().flush()?;
 
     // Connect to daemon terminal server
     let mut stream = TcpStream::connect(&addr).map_err(|e| {
@@ -238,13 +240,15 @@ pub fn connect(vm: &str, session: &str) -> Result<(), ConsoleError> {
         .map_err(|e| ConsoleError::AuthFailed(format!("Invalid response from daemon: {}", e)))?;
 
     if !response.success {
+        println!(" failed");
         return Err(ConsoleError::SessionError(
             response.error.unwrap_or_else(|| "Unknown error".to_string()),
         ));
     }
 
-    println!("Connected to session '{}' on VM '{}'\r", session, vm);
-    println!("Press Ctrl+] to disconnect\r");
+    // Simple connected message
+    println!(" connected\r");
+    println!("(Ctrl+] to detach)\r");
     println!("\r");
 
     // Check if we're in a TTY
@@ -344,7 +348,7 @@ pub fn connect(vm: &str, session: &str) -> Result<(), ConsoleError> {
     let _ = reader_handle.join();
 
     // Terminal will be restored when _raw_terminal is dropped
-    println!("\r\nSession detached.\r");
+    println!("\r\nDetached from {}. Run 'fcm console {}' to reconnect.\r", vm, vm);
 
     Ok(())
 }

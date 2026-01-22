@@ -241,14 +241,13 @@ pub fn destroy_vm(vm: &str) -> Result<(), Box<dyn Error>> {
 
 /// Open a persistent console session on a VM
 pub fn console_vm(vm: &str) -> Result<(), Box<dyn Error>> {
-    // Create a new default session via the HTTP API
+    // Get or create the console session via the HTTP API
     let body = r#"{"is_default": true}"#;
     let response = make_request("POST", &format!("/vms/{}/sessions", vm), Some(body.to_string()))?;
     let session: SessionResponse = response.into_json()?;
 
-    println!("Created session '{}' for VM '{}'", session.id, vm);
-
     // Connect to the session via the terminal streaming protocol
+    // Session ID is hidden from user - they just see the VM name
     console::connect(vm, &session.id).map_err(|e| e.to_string())?;
 
     Ok(())

@@ -63,6 +63,11 @@ pub struct SessionInfo {
     pub is_default: bool,
 }
 
+/// Get the canonical session name for a VM (one session per VM)
+pub fn vm_session_name(vm_id: &str) -> String {
+    format!("console-{}", vm_id)
+}
+
 /// Generate a random 6-character session ID
 fn generate_session_id() -> String {
     let mut rng = rand::thread_rng();
@@ -101,7 +106,54 @@ impl SessionManager {
         }
     }
 
-    /// Create a new session on a VM
+    /// Get or create the console session for a VM
+    ///
+    /// Each VM has exactly one console session. This method:
+    /// 1. Returns existing session if tracked in memory
+    /// 2. Checks if tmux session exists on VM and registers it
+    /// 3. Creates new tmux session if needed
+    ///
+    /// This ensures the session persists across client disconnects.
+    pub fn get_or_create_console(
+        &self,
+        vm_id: &str,
+        vm_ip: &str,
+    ) -> Result<SessionInfo, SessionError> {
+        let tmux_session = vm_session_name(vm_id);
+        let session_id = vm_id.to_string(); // Use VM ID as session ID for simplicity
+
+        // Check if we already have this session in memory
+        {
+            let sessions = self.sessions.lock().unwrap();
+            if let Some(session) = sessions.get(&session_id) {
+                return Ok(session.clone());
+            }
+        }
+
+        // Check if tmux session exists on the VM (from previous daemon run or survived disconnect)
+        let active_sessions = list_tmux_sessions(vm_ip).unwrap_or_default();
+        let session_exists = active_sessions.contains(&tmux_session);
+
+        if !session_exists {
+            // Create tmux session on VM via SSH
+            create_tmux_session(vm_ip, &tmux_session)?;
+        }
+
+        // Register session in memory
+        let session = SessionInfo {
+            id: session_id.clone(),
+            vm_id: vm_id.to_string(),
+            tmux_session,
+            created_at: current_timestamp(),
+            is_default: true,
+        };
+
+        let mut sessions = self.sessions.lock().unwrap();
+        sessions.insert(session_id, session.clone());
+        Ok(session)
+    }
+
+    /// Create a new session on a VM (legacy - use get_or_create_console instead)
     ///
     /// If is_default is true, creates or returns the default session.
     /// Otherwise creates a new named session.
@@ -111,16 +163,12 @@ impl SessionManager {
         vm_ip: &str,
         is_default: bool,
     ) -> Result<SessionInfo, SessionError> {
-        let mut sessions = self.sessions.lock().unwrap();
-
-        // If requesting default session, check if one exists
+        // For default sessions, use the new unified approach
         if is_default {
-            for session in sessions.values() {
-                if session.vm_id == vm_id && session.is_default {
-                    return Ok(session.clone());
-                }
-            }
+            return self.get_or_create_console(vm_id, vm_ip);
         }
+
+        let mut sessions = self.sessions.lock().unwrap();
 
         // Generate new session ID
         let session_id = generate_session_id();
@@ -141,7 +189,8 @@ impl SessionManager {
         Ok(session)
     }
 
-    /// Get a session by ID
+    /// Get a session by ID (kept for potential future use)
+    #[allow(dead_code)]
     pub fn get_session(&self, session_id: &str) -> Option<SessionInfo> {
         let sessions = self.sessions.lock().unwrap();
         sessions.get(session_id).cloned()
@@ -391,6 +440,12 @@ mod tests {
     fn test_session_manager_get_nonexistent() {
         let manager = SessionManager::new();
         assert!(manager.get_session("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_vm_session_name() {
+        assert_eq!(vm_session_name("abc123"), "console-abc123");
+        assert_eq!(vm_session_name("test-vm"), "console-test-vm");
     }
 
     #[test]

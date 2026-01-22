@@ -544,26 +544,18 @@ fn handle_terminal_connection(
         return;
     }
 
-    // Look up session
-    let session = match session_manager.get_session(&request.session) {
-        Some(session) => session,
-        None => {
+    // Get or create the session - this ensures session persists across disconnects
+    // If the session doesn't exist in memory or on the VM, it will be auto-created
+    let session = match session_manager.get_or_create_console(&config.id, &config.ip) {
+        Ok(session) => session,
+        Err(e) => {
             let _ = send_terminal_error(
                 &mut stream,
-                &format!("Session '{}' not found", request.session),
+                &format!("Failed to get/create session: {}", e),
             );
             return;
         }
     };
-
-    // Verify session belongs to requested VM
-    if session.vm_id != config.id {
-        let _ = send_terminal_error(
-            &mut stream,
-            &format!("Session '{}' does not belong to VM '{}'", request.session, request.vm),
-        );
-        return;
-    }
 
     // Spawn SSH process attached to tmux session
     let mut child = match attach_to_session(&config.ip, &session.tmux_session) {
