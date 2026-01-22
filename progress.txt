@@ -951,5 +951,21 @@
 - All 97 tests pass with zero warnings
 - Commit: b613efa
 
+### Task 59: Make VM Argument Optional for console/stop/start/destroy
+- Commands now default to VM from .fcm file when no argument provided
+- Explicit VM name argument still takes precedence
+- main.rs:
+  - Changed vm field from String to Option<String> for Console, Stop, Start, Destroy
+  - Updated match arms to resolve VM name before calling handlers
+- client.rs:
+  - Added resolve_vm_name(vm: Option<String>) helper function
+  - Returns provided name or loads from .fcm config
+- Usage examples:
+  - `fcm console` - uses VM from .fcm
+  - `fcm console other-vm` - uses explicit name
+  - `fcm stop` - uses VM from .fcm
+- All 97 tests pass with zero warnings
+- Commit: 9bb24b5
+
 ## Next Tasks
 - None - all PRD features implemented
