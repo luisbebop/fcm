@@ -55,8 +55,20 @@ pub struct VmConfig {
     pub name: String,
     pub ip: String,
     pub state: VmState,
+    #[serde(default = "default_vcpu_count")]
+    pub vcpu_count: u8,
+    #[serde(default = "default_mem_size_mib")]
+    pub mem_size_mib: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expose: Option<ExposeConfig>,
+}
+
+fn default_vcpu_count() -> u8 {
+    DEFAULT_VCPU_COUNT
+}
+
+fn default_mem_size_mib() -> u32 {
+    DEFAULT_MEM_SIZE_MIB
 }
 
 impl VmConfig {
@@ -69,6 +81,8 @@ impl VmConfig {
             name,
             ip,
             state: VmState::Running,
+            vcpu_count: DEFAULT_VCPU_COUNT,
+            mem_size_mib: DEFAULT_MEM_SIZE_MIB,
             expose,
         }
     }

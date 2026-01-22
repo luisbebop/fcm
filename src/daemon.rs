@@ -59,6 +59,8 @@ pub struct VmResponse {
     pub name: String,
     pub ip: String,
     pub state: String,
+    pub vcpu_count: u8,
+    pub mem_size_mib: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expose: Option<ExposeResponse>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -91,6 +93,8 @@ impl From<&VmConfig> for VmResponse {
                 VmState::Running => "running".to_string(),
                 VmState::Stopped => "stopped".to_string(),
             },
+            vcpu_count: config.vcpu_count,
+            mem_size_mib: config.mem_size_mib,
             expose: config.expose.as_ref().map(|e| ExposeResponse {
                 port: e.port,
                 domain: e.domain.clone(),
@@ -784,12 +788,16 @@ mod tests {
             name: "test-vm".to_string(),
             ip: "172.16.0.50".to_string(),
             state: VmState::Running,
+            vcpu_count: 1,
+            mem_size_mib: 512,
             expose: None,
         };
         let response = VmResponse::from(&config);
         assert_eq!(response.id, "test123");
         assert_eq!(response.name, "test-vm");
         assert_eq!(response.state, "running");
+        assert_eq!(response.vcpu_count, 1);
+        assert_eq!(response.mem_size_mib, 512);
     }
 
     #[test]

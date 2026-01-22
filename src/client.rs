@@ -38,6 +38,8 @@ struct VmResponse {
     #[allow(dead_code)]
     ip: String,
     state: String,
+    vcpu_count: u8,
+    mem_size_mib: u32,
     expose: Option<ExposeResponse>,
     git_url: Option<String>,
 }
@@ -297,10 +299,10 @@ pub fn list_vms() -> Result<(), Box<dyn Error>> {
 
     // Print header
     println!(
-        "{:<20} {:<10} {:<40} GIT",
-        "NAME", "STATE", "DOMAIN"
+        "{:<20} {:<10} {:<6} {:<8} {:<40} GIT",
+        "NAME", "STATE", "VCPU", "MEMORY", "DOMAIN"
     );
-    println!("{}", "-".repeat(110));
+    println!("{}", "-".repeat(130));
 
     // Print each VM
     for vm in vms {
@@ -310,9 +312,10 @@ pub fn list_vms() -> Result<(), Box<dyn Error>> {
             .map(|e| e.domain.as_str())
             .unwrap_or("-");
         let git_url = vm.git_url.as_deref().unwrap_or("-");
+        let memory = format!("{}MB", vm.mem_size_mib);
         println!(
-            "{:<20} {:<10} {:<40} {}",
-            vm.name, vm.state, domain, git_url
+            "{:<20} {:<10} {:<6} {:<8} {:<40} {}",
+            vm.name, vm.state, vm.vcpu_count, memory, domain, git_url
         );
     }
 
@@ -364,13 +367,15 @@ pub fn console_vm(vm: &str) -> Result<(), Box<dyn Error>> {
 
 /// Print VM details
 fn print_vm(vm: &VmResponse) {
-    println!("  Name:  {}", vm.name);
-    println!("  State: {}", vm.state);
+    println!("  Name:   {}", vm.name);
+    println!("  State:  {}", vm.state);
+    println!("  vCPU:   {}", vm.vcpu_count);
+    println!("  Memory: {}MB", vm.mem_size_mib);
     if let Some(expose) = &vm.expose {
-        println!("  URL:   https://{}", expose.domain);
+        println!("  URL:    https://{}", expose.domain);
     }
     if let Some(git_url) = &vm.git_url {
-        println!("  Git:   {}", git_url);
+        println!("  Git:    {}", git_url);
     }
 }
 
@@ -391,6 +396,8 @@ mod tests {
             "name": "test-vm",
             "ip": "172.16.0.50",
             "state": "running",
+            "vcpu_count": 1,
+            "mem_size_mib": 512,
             "expose": null,
             "git_url": null
         }"#;
@@ -399,6 +406,8 @@ mod tests {
         assert_eq!(vm.name, "test-vm");
         assert_eq!(vm.ip, "172.16.0.50");
         assert_eq!(vm.state, "running");
+        assert_eq!(vm.vcpu_count, 1);
+        assert_eq!(vm.mem_size_mib, 512);
         assert!(vm.expose.is_none());
         assert!(vm.git_url.is_none());
     }
@@ -410,6 +419,8 @@ mod tests {
             "name": "test-vm",
             "ip": "172.16.0.50",
             "state": "running",
+            "vcpu_count": 2,
+            "mem_size_mib": 1024,
             "expose": {
                 "port": 8000,
                 "domain": "test-vm.64-34-93-45.sslip.io"
@@ -417,6 +428,8 @@ mod tests {
             "git_url": "root@myserver.com:test-vm.git"
         }"#;
         let vm: VmResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(vm.vcpu_count, 2);
+        assert_eq!(vm.mem_size_mib, 1024);
         assert!(vm.expose.is_some());
         let expose = vm.expose.unwrap();
         assert_eq!(expose.port, 8000);
