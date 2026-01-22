@@ -166,35 +166,30 @@ fn find_ssh_public_key() -> Option<String> {
 const YELLOW: &str = "\x1b[33m";
 const GREEN: &str = "\x1b[32m";
 const BRIGHT_YELLOW: &str = "\x1b[93m";
-const BRIGHT_GREEN: &str = "\x1b[92m";
 const GRAY: &str = "\x1b[90m";
-const WHITE: &str = "\x1b[97m";
 const RESET: &str = "\x1b[0m";
 const BOLD: &str = "\x1b[1m";
 
-/// Print the galaxy ASCII art
-fn print_galaxy() {
+/// Print the logo ASCII art
+fn print_logo() {
     println!(
         r#"
-{d}                  ·    {y}✦{d}                      {reset}
-{d}        {g}·{d}                    {bg}*{d}    ·           {reset}
-{d}    {by}*{d}          {g}. ·{y}✧{g}· .{d}                       {reset}
-{d}          {bg}✦{d}  {g}·{by}⣠⣴⣶⣶⣦⣄{g}·{d}   {y}*{d}                {reset}
-{d}   ·        {by}⣴⣿{y}⣿⣿⣿⣿{by}⣿⣷{d}        {bg}·{d}          {reset}
-{d}       {g}*{d}  {g}⣾⣿{by}⣿{y}⣿⣿⣿⣿{by}⣿{g}⣿⣷{d}                  {reset}
-{d}          {g}⣿⣿{by}⣿{y}⣿{w}✺{y}⣿⣿{by}⣿{g}⣿⣿{d}   {y}✧{d}   {g}·{d}        {reset}
-{d}    {y}·{d}     {g}⣿⣿{by}⣿{y}⣿⣿⣿⣿{by}⣿{g}⣿⣿{d}                  {reset}
-{d}           {g}⠹⣿{by}⣿{y}⣿⣿⣿⣿{by}⣿{g}⣿⠏{d}    ·             {reset}
-{d}  {bg}*{d}          {by}⠙⢿{y}⣿⣿⣿⣿{by}⡿⠋{d}          {y}✦{d}      {reset}
-{d}        {g}·{d}      {g}⠈⠛⠛⠛⠁{d}     {bg}✧{d}                {reset}
-{d}                 {g}·{d}              {g}*{d}   ·       {reset}
+{d}            ░░▒▒▓▓{g}██{d}▓▓▒▒░░{reset}
+{d}         ░▒▓{g}██{by}▀▀      ▀▀{g}██{d}▓▒░{reset}
+{d}       ░▓{g}█{by}▀                ▀{g}█{d}▓░{reset}
+{d}      ▒{g}█{by}▀                    ▀{g}█{d}▒{reset}
+{d}     ▒{g}█{by}▌                      ▐{g}█{d}▒{reset}
+{d}     ▓{g}█                        █{d}▓{reset}
+{d}     ▓{g}█                        █{d}▓{reset}
+{d}     ▒{g}█{by}▌                      ▐{g}█{d}▒{reset}
+{d}      ▒{g}█{by}▄                    ▄{g}█{d}▒{reset}
+{d}       ░▓{g}█{by}▄                ▄{g}█{d}▓░{reset}
+{d}         ░▒▓{g}██{by}▄▄      ▄▄{g}██{d}▓▒░{reset}
+{d}            ░░▒▒▓▓{g}██{d}▓▓▒▒░░{reset}
 "#,
         d = GRAY,
-        y = YELLOW,
         by = BRIGHT_YELLOW,
         g = GREEN,
-        bg = BRIGHT_GREEN,
-        w = WHITE,
         reset = RESET
     );
 }
@@ -212,8 +207,8 @@ pub fn create_vm() -> Result<(), Box<dyn Error>> {
     let response = make_request("POST", "/vms", Some(body))?;
     let vm: VmResponse = response.into_json()?;
 
-    // Print galaxy ASCII art
-    print_galaxy();
+    // Print logo ASCII art
+    print_logo();
 
     // Print VM info
     println!(
