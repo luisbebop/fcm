@@ -812,5 +812,17 @@
 - All 94 tests pass with zero warnings
 - Commits: 27bc32f, 5832b10
 
+### Task 47: Show Deploy Success and URL After Git Push
+- Updated post-receive hook to display deployment status and project URL
+- On successful deploy: shows "-----> Deploy successful!" and the https URL
+- On failed deploy: shows "-----> Deploy failed!" and exits with error
+- Passed domain parameter to generate_post_receive_hook() for URL generation
+- Updated create_repo() in git.rs to accept domain parameter
+- Updated vm.rs to pass domain from expose config to git repo creation
+- Suppressed SSH stderr noise in hook for cleaner output
+- Updated test to verify new hook functionality
+- All 94 tests pass with zero warnings
+- Commit: a3a16e8
+
 ## Next Tasks
 - None - all PRD features implemented
