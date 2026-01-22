@@ -103,6 +103,10 @@ DOMAIN="{domain}"
 WORK_TREE="/tmp/fcm-deploy-$VM_NAME"
 APP_DIR="/app"
 
+ssh_cmd() {{
+    sshpass -p "root" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@$VM_IP" "$@" 2>/dev/null
+}}
+
 echo ""
 echo "-----> Deploying to $VM_NAME..."
 
@@ -121,19 +125,29 @@ done
 
 # Sync code to VM
 echo "-----> Syncing code to VM..."
-cd "$WORK_TREE" && tar cf - . | sshpass -p "root" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@$VM_IP" "cd $APP_DIR && tar xf -" 2>/dev/null
+cd "$WORK_TREE" && tar cf - . | ssh_cmd "cd $APP_DIR && tar xf -"
 
 # Run deployment on VM
 echo "-----> Running deployment..."
-if sshpass -p "root" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@$VM_IP" "/usr/local/bin/fcm-deploy" 2>/dev/null; then
+if ssh_cmd "/usr/local/bin/fcm-deploy"; then
+    # Show startup logs
+    echo ""
+    echo "-----> Startup logs:"
+    ssh_cmd "tail -20 /var/log/fcm-web.log 2>/dev/null" | sed 's/^/       /'
+
     # Clean up
     rm -rf "$WORK_TREE"
     echo ""
-    echo "-----> Deploy successful!"
+    echo "-----> Deployed!"
     echo ""
     echo "       https://$DOMAIN"
     echo ""
 else
+    # Show error logs
+    echo ""
+    echo "-----> Startup logs:"
+    ssh_cmd "tail -30 /var/log/fcm-web.log 2>/dev/null" | sed 's/^/       /'
+
     rm -rf "$WORK_TREE"
     echo ""
     echo "-----> Deploy failed!"
@@ -223,8 +237,10 @@ mod tests {
         assert!(hook.contains("172.16.0.50"));
         assert!(hook.contains("fcm-deploy"));
         assert!(hook.contains("sshpass"));
-        assert!(hook.contains("Deploy successful!"));
+        assert!(hook.contains("Deployed!"));
         assert!(hook.contains("Deploy failed!"));
+        assert!(hook.contains("Startup logs:"));
+        assert!(hook.contains("fcm-web.log"));
         assert!(hook.contains(r#"DOMAIN="test-vm.64-34-93-45.sslip.io""#));
         assert!(hook.contains("https://$DOMAIN"));
     }
