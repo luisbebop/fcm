@@ -469,5 +469,24 @@
 - All 93 tests pass with zero warnings
 - Commit: 2bdb7eb
 
+### Task 26: Remove #[allow(dead_code)] Attributes from console.rs
+- Removed 12 #[allow(dead_code)] annotations from console.rs
+- Code is now used after Task 25 wired CLI commands
+- Removed dead_code from:
+  - DEFAULT_TERMINAL_PORT constant
+  - ConsoleError enum
+  - ConnectRequest struct
+  - ConnectResponse struct
+  - terminal_host() function
+  - token_path() function
+  - load_token() function
+  - RawTerminal struct
+  - RawTerminal::enable() method
+  - RawTerminal::restore() method
+  - is_tty() function
+  - connect() function
+- All 93 tests pass with zero warnings
+- Commit: 21be38e
+
 ## Next Tasks
-- Task 26: Remove #[allow(dead_code)] attributes from console.rs (code is now used)
+- None - console implementation complete
