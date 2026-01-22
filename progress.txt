@@ -930,5 +930,16 @@
 - All 97 tests pass with zero warnings
 - Commit: 7b34ae0
 
+### Task 57: Show Help Directly When No .fcm File Exists
+- Changed behavior when running `fcm` without arguments and no .fcm file present
+- Previously: showed error message telling user to run `fcm --help`
+- Now: displays help output directly using clap's CommandFactory trait
+- main.rs:
+  - Added CommandFactory import from clap
+  - Changed error handler to call `Cli::command().print_help()` instead of error message
+  - Removed exit(1) since showing help is not an error condition
+- All 97 tests pass with zero warnings
+- Commit: c9ccbda
+
 ## Next Tasks
 - None - all PRD features implemented
