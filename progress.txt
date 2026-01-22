@@ -855,5 +855,20 @@
 - All 94 tests pass with zero warnings
 - Commit: 81b3d4b
 
+### Task 51: Fix Ruby Deployment with Native Gem Compilation
+- Fixed "bundler: command not found: puma" error during Rails app deployment
+- Root cause: Ruby gems with native extensions (puma, nokogiri, etc.) require build tools
+- rootfs/Dockerfile:
+  - Added build-base for gcc, make, etc.
+  - Added ruby-dev for Ruby headers
+  - Added libffi-dev, yaml-dev, zlib-dev, openssl-dev for common gem dependencies
+- rootfs/fcm-deploy:
+  - Changed bundle install to use local path (vendor/bundle) for isolation
+  - Added config to exclude development and test groups
+  - Show tail of install log on failures for debugging
+- Rebuilt base-rootfs.img with build dependencies (512MB sparse)
+- All 94 tests pass with zero warnings
+- Commit: ad75f97
+
 ## Next Tasks
 - None - all PRD features implemented
