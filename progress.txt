@@ -648,5 +648,14 @@
 - All 88 tests pass with zero warnings
 - Commit: 9b35d3a
 
+### Task 36: Fix Session Recreation After User Exits Shell
+- Bug: typing `exit` in console destroyed tmux session, but cached SessionInfo remained
+- On reconnect, `get_or_create_console()` returned stale cached info without checking VM
+- Result: "no sessions" error when trying to reconnect
+- Fix: Always check if tmux session exists on VM before returning cached info
+- If session was destroyed (user typed 'exit'), automatically recreate it
+- All 88 tests pass with zero warnings
+- Commit: 066296e
+
 ## Next Tasks
 - None - all PRD features implemented
