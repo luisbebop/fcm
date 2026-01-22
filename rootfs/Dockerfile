@@ -2,7 +2,8 @@ FROM alpine:edge
 
 RUN apk add --no-cache \
     dropbear dropbear-scp ruby ruby-bundler python3 py3-pip \
-    tmux curl bash iproute2 rng-tools
+    tmux curl bash iproute2 rng-tools \
+    nodejs npm git
 
 # Configure dropbear SSH and set root password
 RUN mkdir -p /etc/dropbear && \
@@ -11,6 +12,16 @@ RUN mkdir -p /etc/dropbear && \
     dropbearkey -t ed25519 -f /etc/dropbear/dropbear_ed25519_host_key && \
     echo "root:root" | chpasswd
 
+# Create app directory for Procfile deployments
+RUN mkdir -p /app
+
 # Copy init script to temp location first, then move it
 COPY init /tmp/init
 RUN chmod +x /tmp/init && mv /tmp/init /sbin/init
+
+# Copy deployment scripts
+COPY fcm-deploy /tmp/fcm-deploy
+COPY fcm-runner /tmp/fcm-runner
+RUN chmod +x /tmp/fcm-deploy /tmp/fcm-runner && \
+    mv /tmp/fcm-deploy /usr/local/bin/fcm-deploy && \
+    mv /tmp/fcm-runner /usr/local/bin/fcm-runner

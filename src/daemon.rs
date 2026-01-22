@@ -61,6 +61,8 @@ pub struct VmResponse {
     pub state: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expose: Option<ExposeResponse>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub git_url: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -71,6 +73,16 @@ pub struct ExposeResponse {
 
 impl From<&VmConfig> for VmResponse {
     fn from(config: &VmConfig) -> Self {
+        // Get git URL if repo exists
+        let git_url = if crate::git::repo_exists(&config.name) {
+            // Try to get server IP for git URL
+            crate::caddy::get_server_ip()
+                .ok()
+                .map(|ip| crate::git::get_clone_url(&config.name, &ip))
+        } else {
+            None
+        };
+
         VmResponse {
             id: config.id.clone(),
             name: config.name.clone(),
@@ -83,6 +95,7 @@ impl From<&VmConfig> for VmResponse {
                 port: e.port,
                 domain: e.domain.clone(),
             }),
+            git_url,
         }
     }
 }

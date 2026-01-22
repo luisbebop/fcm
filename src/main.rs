@@ -5,6 +5,7 @@ mod client;
 mod console;
 mod daemon;
 mod firecracker;
+mod git;
 mod network;
 mod session;
 mod vm;

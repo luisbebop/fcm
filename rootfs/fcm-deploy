@@ -1,0 +1,84 @@
+#!/bin/bash
+#
+# fcm-deploy: Deployment script for FCM VMs
+# Runs after code is synced from git push
+#
+
+set -e
+
+APP_DIR="/app"
+LOG="/var/log/fcm-deploy.log"
+PORT=8000
+
+log() {
+    echo "-----> $1"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') $1" >> "$LOG"
+}
+
+error() {
+    echo "!!!    ERROR: $1" >&2
+    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: $1" >> "$LOG"
+    exit 1
+}
+
+# Ensure app directory exists
+mkdir -p "$APP_DIR"
+cd "$APP_DIR"
+
+log "Starting deployment..."
+
+# Detect and install dependencies
+if [ -f "Gemfile" ]; then
+    log "Detected Ruby (Gemfile)"
+    if command -v bundle >/dev/null 2>&1; then
+        log "Running bundle install..."
+        bundle install --without development test >> "$LOG" 2>&1 || log "Warning: bundle install had issues"
+    else
+        error "bundler not found"
+    fi
+fi
+
+if [ -f "requirements.txt" ]; then
+    log "Detected Python (requirements.txt)"
+    if command -v pip3 >/dev/null 2>&1; then
+        log "Running pip install..."
+        pip3 install -r requirements.txt >> "$LOG" 2>&1 || log "Warning: pip install had issues"
+    else
+        error "pip3 not found"
+    fi
+fi
+
+if [ -f "package.json" ]; then
+    log "Detected Node.js (package.json)"
+    if command -v npm >/dev/null 2>&1; then
+        log "Running npm install..."
+        npm install --production >> "$LOG" 2>&1 || log "Warning: npm install had issues"
+    elif command -v yarn >/dev/null 2>&1; then
+        log "Running yarn install..."
+        yarn install --production >> "$LOG" 2>&1 || log "Warning: yarn install had issues"
+    else
+        log "Warning: npm/yarn not found, skipping Node.js dependencies"
+    fi
+fi
+
+# Check for Procfile
+if [ ! -f "Procfile" ]; then
+    log "No Procfile found, skipping process start"
+    exit 0
+fi
+
+# Parse Procfile for web process
+WEB_CMD=$(grep "^web:" Procfile | sed 's/^web:\s*//')
+if [ -z "$WEB_CMD" ]; then
+    log "No web process in Procfile, skipping"
+    exit 0
+fi
+
+log "Found web process: $WEB_CMD"
+
+# Restart the web process using fcm-runner
+log "Starting web process on port $PORT..."
+fcm-runner restart "$WEB_CMD"
+
+log "Deployment complete!"
+log "App running on port $PORT"

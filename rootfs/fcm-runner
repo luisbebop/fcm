@@ -1,0 +1,127 @@
+#!/bin/bash
+#
+# fcm-runner: Simple process manager for FCM VM web processes
+# Usage: fcm-runner [start|stop|restart|status] <command>
+#
+
+set -e
+
+APP_DIR="/app"
+PID_FILE="/var/run/fcm-web.pid"
+LOG_FILE="/var/log/fcm-web.log"
+PORT=8000
+
+log() {
+    echo "$1"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') $1" >> /var/log/fcm-runner.log
+}
+
+get_pid() {
+    if [ -f "$PID_FILE" ]; then
+        cat "$PID_FILE"
+    fi
+}
+
+is_running() {
+    local pid=$(get_pid)
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+        return 0
+    fi
+    return 1
+}
+
+do_stop() {
+    local pid=$(get_pid)
+    if [ -n "$pid" ]; then
+        log "Stopping web process (pid $pid)..."
+        kill "$pid" 2>/dev/null || true
+        sleep 2
+        # Force kill if still running
+        if kill -0 "$pid" 2>/dev/null; then
+            log "Force killing process..."
+            kill -9 "$pid" 2>/dev/null || true
+        fi
+        rm -f "$PID_FILE"
+        log "Stopped"
+    else
+        log "No process running"
+    fi
+}
+
+do_start() {
+    local cmd="$1"
+    if [ -z "$cmd" ]; then
+        echo "Usage: fcm-runner start <command>" >&2
+        exit 1
+    fi
+
+    # Stop any existing process first
+    do_stop
+
+    log "Starting web process: $cmd"
+    log "PORT=$PORT"
+
+    cd "$APP_DIR"
+
+    # Start the process in background with PORT environment variable
+    export PORT
+    nohup sh -c "$cmd" >> "$LOG_FILE" 2>&1 &
+    local pid=$!
+
+    echo "$pid" > "$PID_FILE"
+
+    # Wait a moment and check if it started
+    sleep 2
+    if is_running; then
+        log "Web process started (pid $pid)"
+    else
+        log "Web process failed to start!"
+        rm -f "$PID_FILE"
+        echo "Check $LOG_FILE for errors"
+        exit 1
+    fi
+}
+
+do_status() {
+    if is_running; then
+        local pid=$(get_pid)
+        echo "Web process is running (pid $pid)"
+        echo "Log: $LOG_FILE"
+    else
+        echo "Web process is not running"
+        if [ -f "$PID_FILE" ]; then
+            echo "Stale PID file exists, removing..."
+            rm -f "$PID_FILE"
+        fi
+    fi
+}
+
+do_restart() {
+    local cmd="$1"
+    do_stop
+    do_start "$cmd"
+}
+
+# Main
+ACTION="${1:-status}"
+shift || true
+CMD="$*"
+
+case "$ACTION" in
+    start)
+        do_start "$CMD"
+        ;;
+    stop)
+        do_stop
+        ;;
+    restart)
+        do_restart "$CMD"
+        ;;
+    status)
+        do_status
+        ;;
+    *)
+        echo "Usage: fcm-runner [start|stop|restart|status] [command]"
+        exit 1
+        ;;
+esac

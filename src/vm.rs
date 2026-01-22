@@ -13,6 +13,7 @@ use crate::caddy;
 use crate::firecracker::{
     self, BootSource, Drive, FirecrackerClient, MachineConfig, NetworkInterface,
 };
+use crate::git;
 use crate::network;
 
 pub const BASE_DIR: &str = "/var/lib/firecracker";
@@ -184,6 +185,8 @@ pub enum VmError {
     Firecracker(firecracker::FirecrackerError),
     /// Caddy error
     Caddy(caddy::CaddyError),
+    /// Git error
+    Git(git::GitError),
     /// VM not found
     NotFound(String),
     /// Invalid state for operation
@@ -201,6 +204,7 @@ impl std::fmt::Display for VmError {
             VmError::Network(e) => write!(f, "Network error: {}", e),
             VmError::Firecracker(e) => write!(f, "Firecracker error: {}", e),
             VmError::Caddy(e) => write!(f, "Caddy error: {}", e),
+            VmError::Git(e) => write!(f, "Git error: {}", e),
             VmError::NotFound(msg) => write!(f, "Not found: {}", msg),
             VmError::InvalidState(msg) => write!(f, "Invalid state: {}", msg),
             VmError::ResourceNotAvailable(msg) => write!(f, "Resource not available: {}", msg),
@@ -232,6 +236,12 @@ impl From<firecracker::FirecrackerError> for VmError {
 impl From<caddy::CaddyError> for VmError {
     fn from(err: caddy::CaddyError) -> Self {
         VmError::Caddy(err)
+    }
+}
+
+impl From<git::GitError> for VmError {
+    fn from(err: git::GitError) -> Self {
+        VmError::Git(err)
     }
 }
 
@@ -458,6 +468,12 @@ pub fn create_vm(name: Option<String>, expose_port: Option<u16>, ssh_public_key:
         }
     }
 
+    // Create git repository for Procfile deployments
+    if let Err(e) = git::create_repo(&config.name, &config.ip) {
+        eprintln!("Warning: Failed to create git repo: {}", e);
+        // Don't fail the VM creation for this
+    }
+
     Ok(config)
 }
 
@@ -602,6 +618,11 @@ pub fn destroy_vm(name_or_id: &str) -> Result<()> {
         } else if let Err(e) = caddy::reload() {
             eprintln!("Warning: Failed to reload Caddy: {}", e);
         }
+    }
+
+    // Remove git repository
+    if let Err(e) = git::delete_repo(&config.name) {
+        eprintln!("Warning: Failed to delete git repo: {}", e);
     }
 
     // Remove VM directory

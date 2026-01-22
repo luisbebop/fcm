@@ -37,6 +37,7 @@ struct VmResponse {
     ip: String,
     state: String,
     expose: Option<ExposeResponse>,
+    git_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -266,6 +267,9 @@ fn print_vm(vm: &VmResponse) {
         println!("  Port:  {}", expose.port);
         println!("  URL:   https://{}", expose.domain);
     }
+    if let Some(git_url) = &vm.git_url {
+        println!("  Git:   {}", git_url);
+    }
 }
 
 #[cfg(test)]
@@ -285,7 +289,8 @@ mod tests {
             "name": "test-vm",
             "ip": "172.16.0.50",
             "state": "running",
-            "expose": null
+            "expose": null,
+            "git_url": null
         }"#;
         let vm: VmResponse = serde_json::from_str(json).unwrap();
         assert_eq!(vm.id, "abc123");
@@ -293,6 +298,7 @@ mod tests {
         assert_eq!(vm.ip, "172.16.0.50");
         assert_eq!(vm.state, "running");
         assert!(vm.expose.is_none());
+        assert!(vm.git_url.is_none());
     }
 
     #[test]
@@ -305,13 +311,15 @@ mod tests {
             "expose": {
                 "port": 8000,
                 "domain": "test-vm.64-34-93-45.sslip.io"
-            }
+            },
+            "git_url": "root@myserver.com:test-vm.git"
         }"#;
         let vm: VmResponse = serde_json::from_str(json).unwrap();
         assert!(vm.expose.is_some());
         let expose = vm.expose.unwrap();
         assert_eq!(expose.port, 8000);
         assert_eq!(expose.domain, "test-vm.64-34-93-45.sslip.io");
+        assert_eq!(vm.git_url, Some("root@myserver.com:test-vm.git".to_string()));
     }
 
     #[test]
