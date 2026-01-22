@@ -564,5 +564,17 @@
 - All 88 tests pass with zero warnings
 - Commit: e71ea59
 
+### Task 31: macOS Cross-Compilation Script
+- Created build-macos.sh script for cross-compiling fcm CLI to macOS
+- Uses cargo-zigbuild with Zig as cross-linker (no macOS SDK required)
+- Builds two targets:
+  - aarch64-apple-darwin (Apple Silicon M1/M2/M3) - 2.5MB binary
+  - x86_64-apple-darwin (Intel Mac) - 2.6MB binary
+- Prerequisites: `cargo install cargo-zigbuild`, zig installed
+- Usage: `./build-macos.sh`
+- Outputs to target/<arch>-apple-darwin/release/fcm
+- All 88 tests pass with zero warnings
+- Commit: a87f4fc
+
 ## Next Tasks
 - None - all PRD features implemented
