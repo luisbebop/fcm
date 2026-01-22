@@ -910,5 +910,25 @@
 - All 94 tests pass with zero warnings
 - Commit: df0db0a
 
+### Task 56: Local .fcm Config File for Project-Linked VMs
+- Added local config file support to link project directories to VMs
+- When running `fcm` without arguments:
+  - If .fcm file exists, shows VM info (name, state, URL, git, vCPU, memory, disk)
+  - If no .fcm file, shows error message with help hint
+- client.rs:
+  - Added LocalConfig struct with name, url, git fields
+  - Added save_local_config() to write .fcm to current directory
+  - Added load_local_config() to read .fcm from current directory
+  - Added show_local_vm() to display VM info from local config
+  - Fetches live VM state from daemon if available
+  - Shows helpful commands (fcm console, git push)
+- main.rs:
+  - Made Commands subcommand optional (Option<Commands>)
+  - When no command given, calls show_local_vm()
+- create_vm() now saves .fcm file after successful VM creation
+- Added 3 unit tests for LocalConfig serialization/deserialization
+- All 97 tests pass with zero warnings
+- Commit: 7b34ae0
+
 ## Next Tasks
 - None - all PRD features implemented
