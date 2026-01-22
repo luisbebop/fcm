@@ -28,18 +28,6 @@ enum Commands {
         /// VM name or ID
         vm: String,
     },
-    /// List active sessions for a VM
-    Sessions {
-        /// VM name or ID
-        vm: String,
-    },
-    /// Reattach to an existing session
-    Attach {
-        /// VM name or ID
-        vm: String,
-        /// Session ID
-        session_id: String,
-    },
     /// Stop a running VM
     Stop {
         /// VM name or ID
@@ -78,18 +66,6 @@ fn main() {
         Commands::Console { vm } => {
             if let Err(e) = client::console_vm(&vm) {
                 eprintln!("Error opening console: {}", e);
-                std::process::exit(1);
-            }
-        }
-        Commands::Sessions { vm } => {
-            if let Err(e) = client::list_sessions(&vm) {
-                eprintln!("Error listing sessions: {}", e);
-                std::process::exit(1);
-            }
-        }
-        Commands::Attach { vm, session_id } => {
-            if let Err(e) = client::attach_session(&vm, &session_id) {
-                eprintln!("Error attaching to session: {}", e);
                 std::process::exit(1);
             }
         }

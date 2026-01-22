@@ -15,6 +15,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[derive(Debug)]
 pub enum SessionError {
     /// Session not found
+    #[allow(dead_code)] // Used in Display impl for error messages
     NotFound(String),
     /// VM not found or not running
     #[allow(dead_code)] // Matched in daemon.rs but not constructed yet
@@ -196,56 +197,10 @@ impl SessionManager {
         sessions.get(session_id).cloned()
     }
 
-    /// List all sessions for a VM
-    pub fn list_sessions(&self, vm_id: &str) -> Vec<SessionInfo> {
-        let sessions = self.sessions.lock().unwrap();
-        sessions
-            .values()
-            .filter(|s| s.vm_id == vm_id)
-            .cloned()
-            .collect()
-    }
-
-    /// Kill a session
-    pub fn kill_session(&self, session_id: &str, vm_ip: &str) -> Result<(), SessionError> {
-        let mut sessions = self.sessions.lock().unwrap();
-
-        let session = sessions
-            .get(session_id)
-            .ok_or_else(|| SessionError::NotFound(session_id.to_string()))?
-            .clone();
-
-        // Kill tmux session on VM
-        kill_tmux_session(vm_ip, &session.tmux_session)?;
-
-        sessions.remove(session_id);
-        Ok(())
-    }
-
     /// Remove all sessions for a VM (called when VM is stopped/destroyed)
     pub fn remove_vm_sessions(&self, vm_id: &str) {
         let mut sessions = self.sessions.lock().unwrap();
         sessions.retain(|_, s| s.vm_id != vm_id);
-    }
-
-    /// Sync sessions with actual tmux state on VM
-    /// Removes sessions that no longer exist in tmux
-    /// If unable to list tmux sessions (SSH error), skip syncing to preserve state
-    pub fn sync_sessions(&self, vm_id: &str, vm_ip: &str) {
-        // Only sync if we can successfully list tmux sessions
-        // If listing fails, keep existing sessions rather than removing all
-        let active_tmux = match list_tmux_sessions(vm_ip) {
-            Ok(sessions) => sessions,
-            Err(_) => return, // Skip sync if we can't reach the VM
-        };
-        let mut sessions = self.sessions.lock().unwrap();
-
-        sessions.retain(|_, session| {
-            if session.vm_id != vm_id {
-                return true;
-            }
-            active_tmux.contains(&session.tmux_session)
-        });
     }
 }
 
@@ -330,31 +285,6 @@ fn list_tmux_sessions(vm_ip: &str) -> Result<Vec<String>, SessionError> {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     Ok(stdout.lines().map(|s| s.to_string()).collect())
-}
-
-/// Kill a tmux session on a VM via SSH
-fn kill_tmux_session(vm_ip: &str, session_name: &str) -> Result<(), SessionError> {
-    let output = Command::new("sshpass")
-        .args([
-            "-p", "root",
-            "ssh",
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
-            "-o", "ConnectTimeout=5",
-            &format!("root@{}", vm_ip),
-            "tmux", "kill-session", "-t", session_name,
-        ])
-        .output()?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        // Ignore "session not found" - already gone
-        if !stderr.contains("session not found") && !stderr.contains("no server running") {
-            return Err(SessionError::TmuxError(stderr.to_string()));
-        }
-    }
-
-    Ok(())
 }
 
 /// Spawn an SSH process that attaches to a tmux session
@@ -466,13 +396,6 @@ mod tests {
         assert!(SessionError::VmNotAvailable("vm1".to_string()).to_string().contains("vm1"));
         assert!(SessionError::SshError("timeout".to_string()).to_string().contains("timeout"));
         assert!(SessionError::TmuxError("failed".to_string()).to_string().contains("failed"));
-    }
-
-    #[test]
-    fn test_session_manager_list_empty() {
-        let manager = SessionManager::new();
-        let sessions = manager.list_sessions("nonexistent");
-        assert!(sessions.is_empty());
     }
 
     #[test]

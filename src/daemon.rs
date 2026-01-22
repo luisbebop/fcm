@@ -377,55 +377,6 @@ fn handle_create_session(
     }
 }
 
-/// Handle GET /vms/{id}/sessions - list active sessions for a VM
-fn handle_list_sessions(
-    request: Request,
-    vm_id: &str,
-    session_manager: &SessionManager,
-) -> Result<(), Box<dyn Error>> {
-    // Find VM to validate it exists
-    let config = match vm::find_vm(vm_id) {
-        Ok(config) => config,
-        Err(_) => return send_error(request, 404, &format!("VM '{}' not found", vm_id)),
-    };
-
-    // Sync sessions with actual tmux state if VM is running
-    if config.state == VmState::Running {
-        session_manager.sync_sessions(&config.id, &config.ip);
-    }
-
-    let sessions = session_manager.list_sessions(&config.id);
-    let response: Vec<SessionResponse> = sessions.iter().map(SessionResponse::from).collect();
-    send_json_response(request, 200, &response)
-}
-
-/// Handle DELETE /vms/{id}/sessions/{session-id} - kill a session
-fn handle_kill_session(
-    request: Request,
-    vm_id: &str,
-    session_id: &str,
-    session_manager: &SessionManager,
-) -> Result<(), Box<dyn Error>> {
-    // Find VM to get IP
-    let config = match vm::find_vm(vm_id) {
-        Ok(config) => config,
-        Err(_) => return send_error(request, 404, &format!("VM '{}' not found", vm_id)),
-    };
-
-    // Kill session
-    match session_manager.kill_session(session_id, &config.ip) {
-        Ok(()) => send_json_response(request, 200, &serde_json::json!({"deleted": true})),
-        Err(e) => {
-            let status = match &e {
-                SessionError::NotFound(_) => 404,
-                SessionError::VmNotAvailable(_) => 503,
-                _ => 500,
-            };
-            send_error(request, status, &e.to_string())
-        }
-    }
-}
-
 /// Route and handle a request
 fn handle_request(
     request: Request,
@@ -454,9 +405,6 @@ fn handle_request(
             let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
             match parts.as_slice() {
                 ["vms", vm_id] => handle_get_vm(request, vm_id),
-                ["vms", vm_id, "sessions"] => {
-                    handle_list_sessions(request, vm_id, session_manager)
-                }
                 _ => send_error(request, 404, "Not found"),
             }
         }
@@ -475,9 +423,6 @@ fn handle_request(
             let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
             match parts.as_slice() {
                 ["vms", vm_id] => handle_destroy_vm(request, vm_id, session_manager),
-                ["vms", vm_id, "sessions", session_id] => {
-                    handle_kill_session(request, vm_id, session_id, session_manager)
-                }
                 _ => send_error(request, 404, "Not found"),
             }
         }
