@@ -848,5 +848,12 @@
 - All 94 tests pass with zero warnings
 - Commit: 581a15b
 
+### Task 50: Change Git Remote Name from fcm to origin
+- Changed Quick Start instructions to use "origin" instead of "fcm"
+- Users can now use default git commands: `git push origin main` or just `git push`
+- Updated client.rs create_vm() output
+- All 94 tests pass with zero warnings
+- Commit: 81b3d4b
+
 ## Next Tasks
 - None - all PRD features implemented
