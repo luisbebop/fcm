@@ -20,12 +20,10 @@ use std::thread;
 use std::time::Duration;
 
 /// Default daemon terminal port
-#[allow(dead_code)] // Will be used in Task 25 when CLI commands are wired
 const DEFAULT_TERMINAL_PORT: u16 = 7778;
 
 /// Console error types
 #[derive(Debug)]
-#[allow(dead_code)] // Will be used in Task 25 when CLI commands are wired
 pub enum ConsoleError {
     /// Connection failed
     ConnectionFailed(String),
@@ -61,7 +59,6 @@ impl From<io::Error> for ConsoleError {
 
 /// Request to connect to a console session
 #[derive(Debug, Serialize)]
-#[allow(dead_code)] // Will be used in Task 25 when CLI commands are wired
 struct ConnectRequest {
     vm: String,
     session: String,
@@ -70,14 +67,12 @@ struct ConnectRequest {
 
 /// Response from daemon after connect request
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)] // Will be used in Task 25 when CLI commands are wired
 struct ConnectResponse {
     success: bool,
     error: Option<String>,
 }
 
 /// Get the terminal server host from FCM_HOST env var or default
-#[allow(dead_code)] // Will be used in Task 25 when CLI commands are wired
 fn terminal_host() -> String {
     if let Ok(host) = env::var("FCM_HOST") {
         // Extract hostname from FCM_HOST (remove scheme and port)
@@ -94,7 +89,6 @@ fn terminal_host() -> String {
 }
 
 /// Get the client token file path (~/.fcm-token)
-#[allow(dead_code)] // Will be used in Task 25 when CLI commands are wired
 fn token_path() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
@@ -102,7 +96,6 @@ fn token_path() -> PathBuf {
 }
 
 /// Load auth token from environment or file
-#[allow(dead_code)] // Will be used in Task 25 when CLI commands are wired
 fn load_token() -> Result<String, ConsoleError> {
     // First try FCM_TOKEN env var
     if let Ok(token) = env::var("FCM_TOKEN") {
@@ -129,7 +122,6 @@ fn load_token() -> Result<String, ConsoleError> {
 }
 
 /// Terminal settings wrapper for raw mode
-#[allow(dead_code)] // Will be used in Task 25 when CLI commands are wired
 struct RawTerminal {
     original_termios: libc::termios,
     fd: i32,
@@ -137,7 +129,6 @@ struct RawTerminal {
 
 impl RawTerminal {
     /// Enable raw mode on stdin
-    #[allow(dead_code)] // Will be used in Task 25 when CLI commands are wired
     fn enable() -> Result<Self, ConsoleError> {
         let fd = io::stdin().as_raw_fd();
 
@@ -174,7 +165,6 @@ impl RawTerminal {
     }
 
     /// Restore original terminal settings
-    #[allow(dead_code)] // Will be used in Task 25 when CLI commands are wired
     fn restore(&self) {
         unsafe {
             libc::tcsetattr(self.fd, libc::TCSAFLUSH, &self.original_termios);
@@ -189,7 +179,6 @@ impl Drop for RawTerminal {
 }
 
 /// Check if stdin is a TTY
-#[allow(dead_code)] // Will be used in Task 25 when CLI commands are wired
 fn is_tty() -> bool {
     unsafe { libc::isatty(io::stdin().as_raw_fd()) == 1 }
 }
@@ -202,7 +191,6 @@ fn is_tty() -> bool {
 /// 3. Enters raw terminal mode
 /// 4. Proxies stdin/stdout to the TCP connection
 /// 5. Restores terminal on exit
-#[allow(dead_code)] // Will be used in Task 25 when CLI commands are wired
 pub fn connect(vm: &str, session: &str) -> Result<(), ConsoleError> {
     let host = terminal_host();
     let addr = format!("{}:{}", host, DEFAULT_TERMINAL_PORT);
