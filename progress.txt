@@ -777,5 +777,21 @@
 - All 94 tests pass with zero warnings
 - Commits: 12d28b5, 8431fa0, 7ee5628, 281be7e, 3108f18, faee19b, 1879e09, bb7a1e8
 
+### Task 43: Remove ID and IP from Command Output
+- Simplified `fcm ls` table output to show only NAME, STATE, DOMAIN, GIT
+- Removed ID and IP columns from list_vms() header and row output
+- Updated print_vm() to remove ID, IP, and Port fields
+- print_vm() now shows only Name, State, URL, and Git
+- Added #[allow(dead_code)] to VmResponse fields still needed for JSON deserialization
+- Adjusted column widths for cleaner table formatting
+- All 94 tests pass with zero warnings
+- Commit: f686a62
+
+### Task 44: Fix Clippy Warning
+- Fixed clippy::print_literal warning in list_vms()
+- Embedded "GIT" literal directly in format string instead of passing as argument
+- All 94 tests pass with zero clippy warnings
+- Commit: 4283fcc
+
 ## Next Tasks
 - None - all PRD features implemented
