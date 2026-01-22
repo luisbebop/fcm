@@ -343,6 +343,11 @@ fn print_logo() {
 
 /// Create a new VM
 pub fn create_vm() -> Result<(), Box<dyn Error>> {
+    // Check if .fcm already exists - show existing VM info instead of creating new
+    if local_config_path().exists() {
+        return show_local_vm();
+    }
+
     let ssh_public_key = find_ssh_public_key();
     if ssh_public_key.is_none() {
         eprintln!("Warning: No SSH public key found in ~/.ssh/, password auth will be required");
