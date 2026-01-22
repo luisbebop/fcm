@@ -22,7 +22,7 @@ const BASE_ROOTFS_PATH: &str = "/var/lib/firecracker/base-rootfs.img";
 
 /// Default VM configuration
 const DEFAULT_VCPU_COUNT: u8 = 1;
-const DEFAULT_MEM_SIZE_MIB: u32 = 512;
+const DEFAULT_MEM_SIZE_MIB: u32 = 1024;
 
 const ADJECTIVES: &[&str] = &[
     "cosmic", "quantum", "stellar", "solar", "lunar", "orbital", "nebula",
@@ -872,6 +872,6 @@ mod tests {
     #[test]
     fn test_default_vm_config() {
         assert_eq!(DEFAULT_VCPU_COUNT, 1);
-        assert_eq!(DEFAULT_MEM_SIZE_MIB, 512);
+        assert_eq!(DEFAULT_MEM_SIZE_MIB, 1024);
     }
 }

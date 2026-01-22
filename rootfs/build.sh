@@ -14,7 +14,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUTPUT_PATH="${1:-/var/lib/firecracker/base-rootfs.img}"
 IMAGE_NAME="fcm-rootfs"
 CONTAINER_NAME="fcm-rootfs-builder"
-IMAGE_SIZE_MB=1024  # 1GB filesystem, will be sparse
+IMAGE_SIZE_MB=2048  # 2GB filesystem, will be sparse
 
 echo "==> Building fcm base rootfs image"
 echo "    Output: $OUTPUT_PATH"

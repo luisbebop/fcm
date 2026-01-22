@@ -72,6 +72,15 @@ log ">>> init: ssh launched (step 2)"
 # Create /app directory for Procfile deployments
 mkdir -p /app
 
+# Create swap file for memory-intensive operations (gem compilation, etc.)
+if [ ! -f /swapfile ]; then
+    log ">>> init: creating swap file"
+    dd if=/dev/zero of=/swapfile bs=1M count=512 2>/dev/null
+    chmod 600 /swapfile
+    mkswap /swapfile >/dev/null 2>&1
+fi
+swapon /swapfile 2>/dev/null || true
+
 log ">>> init: services started"
 
 log "============================================"
