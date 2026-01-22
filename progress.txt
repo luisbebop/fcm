@@ -834,5 +834,19 @@
 - All 94 tests pass with zero warnings
 - Commit: f68a8d3
 
+### Task 49: Fix pip install and PATH Issues for Python Deployments
+- Fixed "gunicorn: not found" error during Python app deployment
+- Root cause: Alpine Linux with Python 3.11+ requires --break-system-packages flag (PEP 668)
+- rootfs/fcm-deploy:
+  - Added --break-system-packages flag to pip3 install command
+  - Without this flag, pip install silently fails on externally managed Python
+- rootfs/fcm-runner:
+  - Added PATH export to include /usr/local/bin:/usr/bin:/bin
+  - Ensures pip-installed binaries (like gunicorn) are found when starting web process
+- Rebuilt base-rootfs.img with updated scripts
+- Updated scripts on existing VM (arctic-eclipse) for immediate fix
+- All 94 tests pass with zero warnings
+- Commit: 581a15b
+
 ## Next Tasks
 - None - all PRD features implemented
