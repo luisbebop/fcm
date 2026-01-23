@@ -1054,5 +1054,50 @@
   - Status page still works locally on port 7780 even if Caddy not installed
 - Commit: 7aa37fe
 
+### Task 64: Fix Clippy Warning in Status Server
+- Fixed clippy::manual_flatten warning in run_status_server()
+- Changed `for stream in listener.incoming() { if let Ok(mut stream) = stream { ... } }`
+- To more idiomatic `for mut stream in listener.incoming().flatten() { ... }`
+- All 97 tests pass with zero clippy warnings
+- Commit: c503510
+
+### Task 65: Clickable Domain Links and VM Sorting by Creation Date
+- Made domain column in HTML status page a clickable link (`<a href>` with `target="_blank"`)
+- Added `created_at` field to VmConfig struct for tracking VM creation time
+- New VMs get current Unix timestamp; existing VMs use file modification time as fallback
+- VMs now sorted by creation date (newest first) in both:
+  - CLI `fcm ls` command
+  - HTML status page at fcm.[ip].sslip.io
+- Updated VmResponse in both daemon.rs and client.rs to include created_at
+- Updated tests to include created_at field
+- All 97 tests pass with zero warnings
+- Commit: 9963b30
+- Follow-up: Changed sort order to descending (newest first)
+- Commit: 0e8b957
+
+### Task 66: Google OAuth2 Login for Status Page
+- Added Google OAuth2 authentication to the public status page
+- src/daemon.rs:
+  - Added Google OAuth2 configuration constants (client ID, secret, callback path)
+  - Added GoogleUserInfo and GoogleTokenResponse structs for API responses
+  - Added SessionStore type (Arc<Mutex<HashMap<String, GoogleUserInfo>>>) for sessions
+  - Added URL encoding/decoding helpers (url_encode, url_decode)
+  - Added parse_query_string() and parse_cookies() for HTTP request parsing
+  - Added exchange_code_for_token() to exchange auth code for access token
+  - Added fetch_google_user_info() to get user profile from Google
+  - Added build_google_auth_url() to generate OAuth authorization URL
+  - Added parse_http_request() for proper HTTP method/path/header parsing
+  - Added send_redirect() and send_html_response() helper functions
+  - Added html_escape() to prevent XSS in user names
+  - Updated generate_status_html() to accept optional user info
+  - Updated run_status_server() to handle OAuth callback, logout, and sessions
+  - OAuth callback path: /oauth2/callback
+  - Login button: "Login with Google" (blue button, Google brand color #4285f4)
+  - When logged in: shows "Welcome, [name]" with logout link
+  - Session cookies: HttpOnly, Secure, SameSite=Lax, 7-day expiry
+  - Logout clears session cookie and removes from session store
+- All 97 tests pass with zero warnings
+- Commit: 7f73ff3
+
 ## Next Tasks
 - None - all PRD features implemented
