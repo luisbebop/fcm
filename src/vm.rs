@@ -233,8 +233,8 @@ pub fn list_vms() -> io::Result<Vec<VmConfig>> {
         }
     }
 
-    // Sort by creation date (oldest first)
-    vms.sort_by_key(|vm| vm.created_at);
+    // Sort by creation date (newest first)
+    vms.sort_by_key(|vm| std::cmp::Reverse(vm.created_at));
 
     Ok(vms)
 }
