@@ -83,12 +83,17 @@ struct Release {
     size_mb: f64,
 }
 
-/// Get the current commit hash from the COMMIT file
-fn get_current_commit() -> Option<String> {
+/// Get the current commit hash and build time from the COMMIT file
+/// Format: "commit datetime" (e.g., "abc1234 2024-01-23 15:30")
+fn get_current_commit() -> Option<(String, String)> {
     let commit_path = format!("{}/COMMIT", RELEASES_DIR);
-    fs::read_to_string(&commit_path)
-        .ok()
-        .map(|s| s.trim().to_string())
+    let content = fs::read_to_string(&commit_path).ok()?;
+    let parts: Vec<&str> = content.trim().splitn(2, ' ').collect();
+    if parts.len() >= 2 {
+        Some((parts[0].to_string(), parts[1].to_string()))
+    } else {
+        Some((parts[0].to_string(), String::new()))
+    }
 }
 
 /// List available releases in the releases directory
@@ -467,7 +472,7 @@ fn generate_status_html(stats: &DaemonStats, user: Option<&UserRecord>) -> Strin
     };
 
     // Get current commit and releases
-    let current_commit = get_current_commit().unwrap_or_else(|| "unknown".to_string());
+    let (current_commit, build_time) = get_current_commit().unwrap_or_else(|| ("unknown".to_string(), String::new()));
     let releases = list_releases();
 
     // Build download links
@@ -491,14 +496,20 @@ fn generate_status_html(stats: &DaemonStats, user: Option<&UserRecord>) -> Strin
             })
             .collect();
 
+        let version_info = if build_time.is_empty() {
+            format!("<code>{}</code>", &current_commit[..7.min(current_commit.len())])
+        } else {
+            format!("<code>{}</code> · {}", &current_commit[..7.min(current_commit.len())], build_time)
+        };
+
         format!(
             r#"
     <h2>Download CLI</h2>
     <p style="margin-bottom:10px;">{}</p>
-    <p style="font-size:0.85em;color:#666;margin-top:5px;">Version: <code>{}</code></p>
+    <p style="font-size:0.85em;color:#666;margin-top:5px;">{}</p>
 "#,
             download_links,
-            &current_commit[..7.min(current_commit.len())]
+            version_info
         )
     };
 
@@ -592,7 +603,7 @@ $ git push origin main</pre>
     </table>
 
     <p style="margin-top:40px;font-size:0.85em;color:#666;">
-        <a href="https://github.com/luisbebop/fcm">Source</a> · commit <code>{}</code>
+        <a href="https://github.com/luisbebop/fcm">Source</a>
     </p>
 </body>
 </html>"##,
@@ -602,8 +613,7 @@ $ git push origin main</pre>
         stats.format_uptime(),
         running_count,
         stopped_count,
-        vm_rows,
-        &current_commit[..7.min(current_commit.len())]
+        vm_rows
     )
 }
 

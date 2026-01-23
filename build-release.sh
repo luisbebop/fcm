@@ -22,8 +22,9 @@ echo ""
 # Create releases directory if it doesn't exist
 sudo mkdir -p "$RELEASES_DIR"
 
-# Write current commit
-echo "$COMMIT" | sudo tee "$RELEASES_DIR/COMMIT" > /dev/null
+# Write current commit and datetime
+DATETIME=$(date '+%Y-%m-%d %H:%M UTC')
+echo "$COMMIT $DATETIME" | sudo tee "$RELEASES_DIR/COMMIT" > /dev/null
 
 # Build Linux x86_64 (native)
 echo "Building linux-x86_64..."
