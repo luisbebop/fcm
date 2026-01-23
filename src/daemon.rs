@@ -34,6 +34,9 @@ const DEFAULT_EXPOSE_PORT: u16 = 8000;
 /// Status page HTTP port (internal, proxied by Caddy)
 const STATUS_PAGE_PORT: u16 = 7780;
 
+/// Directory for release binaries
+const RELEASES_DIR: &str = "/var/lib/firecracker/releases";
+
 /// Daemon statistics for status page
 #[derive(Clone)]
 struct DaemonStats {
@@ -67,6 +70,72 @@ impl DaemonStats {
             format!("{}m", mins)
         }
     }
+}
+
+/// Represents an available release binary
+#[derive(Debug, Clone)]
+struct Release {
+    #[allow(dead_code)]
+    commit: String,
+    platform: String,
+    filename: String,
+    #[allow(dead_code)]
+    size_mb: f64,
+}
+
+/// Get the current commit hash from the COMMIT file
+fn get_current_commit() -> Option<String> {
+    let commit_path = format!("{}/COMMIT", RELEASES_DIR);
+    fs::read_to_string(&commit_path)
+        .ok()
+        .map(|s| s.trim().to_string())
+}
+
+/// List available releases in the releases directory
+fn list_releases() -> Vec<Release> {
+    let mut releases = Vec::new();
+
+    let entries = match fs::read_dir(RELEASES_DIR) {
+        Ok(entries) => entries,
+        Err(_) => return releases,
+    };
+
+    for entry in entries.flatten() {
+        let filename = entry.file_name().to_string_lossy().to_string();
+
+        // Expected format: fcm-<commit>-<platform>.tar.gz
+        // e.g., fcm-abc1234-linux-x86_64.tar.gz, fcm-abc1234-darwin-arm64.tar.gz
+        if !filename.starts_with("fcm-") || !filename.ends_with(".tar.gz") {
+            continue;
+        }
+
+        // Parse the filename
+        let name_without_ext = filename.trim_end_matches(".tar.gz");
+        let parts: Vec<&str> = name_without_ext.split('-').collect();
+
+        // Format: fcm-<commit>-<os>-<arch>
+        if parts.len() >= 4 {
+            let commit = parts[1].to_string();
+            let platform = format!("{}-{}", parts[2], parts[3]);
+
+            // Get file size
+            let size_mb = entry.metadata()
+                .map(|m| m.len() as f64 / 1_048_576.0)
+                .unwrap_or(0.0);
+
+            releases.push(Release {
+                commit,
+                platform,
+                filename,
+                size_mb,
+            });
+        }
+    }
+
+    // Sort by platform (darwin first, then linux)
+    releases.sort_by(|a, b| a.platform.cmp(&b.platform));
+
+    releases
 }
 
 /// Google OAuth2 configuration
@@ -397,6 +466,43 @@ fn generate_status_html(stats: &DaemonStats, user: Option<&UserRecord>) -> Strin
         }
     };
 
+    // Get current commit and releases
+    let current_commit = get_current_commit().unwrap_or_else(|| "unknown".to_string());
+    let releases = list_releases();
+
+    // Build download links
+    let download_section = if releases.is_empty() {
+        String::new()
+    } else {
+        let download_links: String = releases
+            .iter()
+            .map(|r| {
+                let platform_name = match r.platform.as_str() {
+                    "darwin-arm64" => "macOS (Apple Silicon)",
+                    "darwin-x86_64" => "macOS (Intel)",
+                    "linux-x86_64" => "Linux (x86_64)",
+                    "linux-aarch64" => "Linux (ARM64)",
+                    _ => &r.platform,
+                };
+                format!(
+                    r#"<a href="/releases/{}" style="display:inline-block;margin:5px 10px 5px 0;padding:8px 16px;background:#333;color:#fff;text-decoration:none;border-radius:4px;font-size:0.85em;">{}</a>"#,
+                    r.filename,
+                    platform_name
+                )
+            })
+            .collect();
+
+        format!(
+            r#"
+    <h2>Download CLI</h2>
+    <p style="margin-bottom:10px;">{}</p>
+    <p style="font-size:0.85em;color:#666;margin-top:5px;">Version: <code>{}</code></p>
+"#,
+            download_links,
+            &current_commit[..7.min(current_commit.len())]
+        )
+    };
+
     format!(
         r##"<!DOCTYPE html>
 <html lang="en">
@@ -466,7 +572,7 @@ fn generate_status_html(stats: &DaemonStats, user: Option<&UserRecord>) -> Strin
         Create a VM, push your code with git, and it's live with SSL in seconds.
         Each VM gets 1 vCPU, 1GB RAM, and runs your app via Procfile.
     </p>
-
+{}
     <h2>Deploy</h2>
     <pre>$ fcm create
 $ git init && echo "web: python3 -m http.server 8000" > Procfile
@@ -486,16 +592,18 @@ $ git push origin main</pre>
     </table>
 
     <p style="margin-top:40px;font-size:0.85em;color:#666;">
-        <a href="https://github.com/luisbebop/fcm">Source</a>
+        <a href="https://github.com/luisbebop/fcm">Source</a> · commit <code>{}</code>
     </p>
 </body>
 </html>"##,
         auth_section,
+        download_section,
         stats.server_ip,
         stats.format_uptime(),
         running_count,
         stopped_count,
-        vm_rows
+        vm_rows,
+        &current_commit[..7.min(current_commit.len())]
     )
 }
 
@@ -1568,6 +1676,35 @@ fn run_status_server(stats: Arc<DaemonStats>, sessions: SessionStore) {
                     // Clear cookie and redirect
                     let cookie = "fcm_session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0";
                     send_redirect(&mut stream, &base_url, Some(cookie));
+                    return;
+                }
+
+                // Serve release files
+                if let Some(filename) = path.strip_prefix("/releases/") {
+                    // Sanitize: only allow alphanumeric, dash, dot, underscore
+                    if filename.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.' || c == '_') {
+                        let file_path = format!("{}/{}", RELEASES_DIR, filename);
+                        if let Ok(file_data) = std::fs::read(&file_path) {
+                            let content_type = if filename.ends_with(".tar.gz") {
+                                "application/gzip"
+                            } else {
+                                "application/octet-stream"
+                            };
+                            let response = format!(
+                                "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nContent-Disposition: attachment; filename=\"{}\"\r\nCache-Control: public, max-age=86400\r\nConnection: close\r\n\r\n",
+                                content_type,
+                                file_data.len(),
+                                filename
+                            );
+                            let _ = stream.write_all(response.as_bytes());
+                            let _ = stream.write_all(&file_data);
+                            let _ = stream.flush();
+                            return;
+                        }
+                    }
+                    // File not found or invalid filename
+                    let html = "<html><body><h1>404 Not Found</h1></body></html>";
+                    send_html_response(&mut stream, 404, html, None);
                     return;
                 }
 
