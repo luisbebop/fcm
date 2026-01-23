@@ -143,10 +143,33 @@ fn list_releases() -> Vec<Release> {
     releases
 }
 
-/// Google OAuth2 configuration
-const GOOGLE_CLIENT_ID: &str = "GOOGLE_CLIENT_ID_PLACEHOLDER";
-const GOOGLE_CLIENT_SECRET: &str = "GOOGLE_CLIENT_SECRET_PLACEHOLDER";
+/// Google OAuth2 configuration (loaded from environment)
 const OAUTH_CALLBACK_PATH: &str = "/oauth2/callback";
+
+/// Load Google OAuth credentials from environment or .env file
+fn load_oauth_credentials() -> (String, String) {
+    // Try to load from .env file if environment variables not set
+    if std::env::var("GOOGLE_CLIENT_ID").is_err() {
+        if let Ok(content) = std::fs::read_to_string("/home/ubuntu/fcm/.env") {
+            for line in content.lines() {
+                let line = line.trim();
+                if line.starts_with('#') || line.is_empty() {
+                    continue;
+                }
+                if let Some((key, value)) = line.split_once('=') {
+                    std::env::set_var(key.trim(), value.trim());
+                }
+            }
+        }
+    }
+
+    let client_id = std::env::var("GOOGLE_CLIENT_ID")
+        .expect("GOOGLE_CLIENT_ID environment variable not set");
+    let client_secret = std::env::var("GOOGLE_CLIENT_SECRET")
+        .expect("GOOGLE_CLIENT_SECRET environment variable not set");
+
+    (client_id, client_secret)
+}
 
 /// User info from Google OAuth
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -369,11 +392,12 @@ fn parse_cookies(cookie_header: &str) -> HashMap<String, String> {
 
 /// Exchange OAuth code for access token
 fn exchange_code_for_token(code: &str, redirect_uri: &str) -> Result<GoogleTokenResponse, String> {
+    let (client_id, client_secret) = load_oauth_credentials();
     let body = format!(
         "code={}&client_id={}&client_secret={}&redirect_uri={}&grant_type=authorization_code",
         url_encode(code),
-        url_encode(GOOGLE_CLIENT_ID),
-        url_encode(GOOGLE_CLIENT_SECRET),
+        url_encode(&client_id),
+        url_encode(&client_secret),
         url_encode(redirect_uri)
     );
 
@@ -401,9 +425,10 @@ fn fetch_google_user_info(access_token: &str) -> Result<GoogleUserInfo, String> 
 
 /// Build Google OAuth authorization URL with optional state
 fn build_google_auth_url(redirect_uri: &str, state: Option<&str>) -> String {
+    let (client_id, _) = load_oauth_credentials();
     let base = format!(
         "https://accounts.google.com/o/oauth2/v2/auth?client_id={}&redirect_uri={}&response_type=code&scope=email%20profile",
-        url_encode(GOOGLE_CLIENT_ID),
+        url_encode(&client_id),
         url_encode(redirect_uri)
     );
     if let Some(s) = state {
