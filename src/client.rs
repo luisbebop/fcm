@@ -359,12 +359,25 @@ pub fn create_vm() -> Result<(), Box<dyn Error>> {
         return show_local_vm();
     }
 
-    let ssh_public_key = find_ssh_public_key();
-    if ssh_public_key.is_none() {
-        eprintln!("Warning: No SSH public key found in ~/.ssh/, password auth will be required");
-    }
+    // SSH key is required for git push deployment
+    let ssh_public_key = match find_ssh_public_key() {
+        Some(key) => key,
+        None => {
+            eprintln!();
+            eprintln!("{bold}{w}  No SSH key found{reset}", bold = BOLD, w = WHITE, reset = RESET);
+            eprintln!();
+            eprintln!("{d}  An SSH key is required for git push deployment.{reset}", d = GRAY, reset = RESET);
+            eprintln!("{d}  Generate one with:{reset}", d = GRAY, reset = RESET);
+            eprintln!();
+            eprintln!("  {w}ssh-keygen -t ed25519{reset}", w = WHITE, reset = RESET);
+            eprintln!();
+            eprintln!("{d}  Then run {w}fcm create{d} again.{reset}", d = GRAY, w = WHITE, reset = RESET);
+            eprintln!();
+            return Err("SSH key required".into());
+        }
+    };
 
-    let request = CreateVmRequest { ssh_public_key };
+    let request = CreateVmRequest { ssh_public_key: Some(ssh_public_key) };
     let body = serde_json::to_string(&request)?;
 
     let response = make_request("POST", "/vms", Some(body))?;
