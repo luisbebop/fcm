@@ -112,6 +112,13 @@ pub fn add_site(domain: &str, vm_ip: &str, port: u16) -> Result<()> {
 
 /// Add a VM to a specific Caddyfile (for testing)
 pub fn add_site_to_file(domain: &str, vm_ip: &str, port: u16, caddyfile_path: &str) -> Result<()> {
+    // Ensure parent directory exists
+    if let Some(parent) = std::path::Path::new(caddyfile_path).parent() {
+        if !parent.exists() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+
     // Read existing Caddyfile or create empty
     let existing = fs::read_to_string(caddyfile_path).unwrap_or_default();
 
