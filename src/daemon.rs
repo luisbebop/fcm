@@ -83,10 +83,12 @@ fn generate_status_html(stats: &DaemonStats) -> String {
             .map(|v| {
                 let state_color = if v.state == VmState::Running { "#2d5" } else { "#888" };
                 let state_text = if v.state == VmState::Running { "running" } else { "stopped" };
-                let domain = v.expose.as_ref().map(|e| e.domain.as_str()).unwrap_or("-");
+                let domain_html = v.expose.as_ref()
+                    .map(|e| format!("<a href=\"https://{}\" target=\"_blank\">{}</a>", e.domain, e.domain))
+                    .unwrap_or_else(|| "-".to_string());
                 format!(
                     "<tr><td>{}</td><td style=\"color:{}\">{}</td><td>{}</td><td>{}MB</td></tr>",
-                    v.name, state_color, state_text, domain, v.disk_used_mb()
+                    v.name, state_color, state_text, domain_html, v.disk_used_mb()
                 )
             })
             .collect()
@@ -228,6 +230,7 @@ pub struct VmResponse {
     pub mem_size_mib: u32,
     pub disk_used_mb: u64,
     pub disk_max_mb: u64,
+    pub created_at: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expose: Option<ExposeResponse>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -264,6 +267,7 @@ impl From<&VmConfig> for VmResponse {
             mem_size_mib: config.mem_size_mib,
             disk_used_mb: config.disk_used_mb(),
             disk_max_mb: config.disk_max_mb(),
+            created_at: config.created_at,
             expose: config.expose.as_ref().map(|e| ExposeResponse {
                 port: e.port,
                 domain: e.domain.clone(),
@@ -1014,6 +1018,7 @@ mod tests {
             state: VmState::Running,
             vcpu_count: 1,
             mem_size_mib: 512,
+            created_at: 1700000000,
             expose: None,
         };
         let response = VmResponse::from(&config);
@@ -1022,6 +1027,7 @@ mod tests {
         assert_eq!(response.state, "running");
         assert_eq!(response.vcpu_count, 1);
         assert_eq!(response.mem_size_mib, 512);
+        assert_eq!(response.created_at, 1700000000);
     }
 
     #[test]

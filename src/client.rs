@@ -169,6 +169,8 @@ struct VmResponse {
     mem_size_mib: u32,
     disk_used_mb: u64,
     disk_max_mb: u64,
+    #[allow(dead_code)]
+    created_at: u64,
     expose: Option<ExposeResponse>,
     git_url: Option<String>,
 }
@@ -559,6 +561,7 @@ mod tests {
             "mem_size_mib": 512,
             "disk_used_mb": 145,
             "disk_max_mb": 1024,
+            "created_at": 1700000000,
             "expose": null,
             "git_url": null
         }"#;
@@ -571,6 +574,7 @@ mod tests {
         assert_eq!(vm.mem_size_mib, 512);
         assert_eq!(vm.disk_used_mb, 145);
         assert_eq!(vm.disk_max_mb, 1024);
+        assert_eq!(vm.created_at, 1700000000);
         assert!(vm.expose.is_none());
         assert!(vm.git_url.is_none());
     }
@@ -586,6 +590,7 @@ mod tests {
             "mem_size_mib": 1024,
             "disk_used_mb": 200,
             "disk_max_mb": 2048,
+            "created_at": 1700000000,
             "expose": {
                 "port": 8000,
                 "domain": "test-vm.64-34-93-45.sslip.io"
@@ -597,6 +602,7 @@ mod tests {
         assert_eq!(vm.mem_size_mib, 1024);
         assert_eq!(vm.disk_used_mb, 200);
         assert_eq!(vm.disk_max_mb, 2048);
+        assert_eq!(vm.created_at, 1700000000);
         assert!(vm.expose.is_some());
         let expose = vm.expose.unwrap();
         assert_eq!(expose.port, 8000);

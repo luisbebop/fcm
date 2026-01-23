@@ -59,6 +59,8 @@ pub struct VmConfig {
     pub vcpu_count: u8,
     #[serde(default = "default_mem_size_mib")]
     pub mem_size_mib: u32,
+    #[serde(default)]
+    pub created_at: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expose: Option<ExposeConfig>,
 }
@@ -76,6 +78,10 @@ impl VmConfig {
     pub fn new(name: Option<String>, ip: String, expose: Option<ExposeConfig>) -> Self {
         let id = generate_id();
         let name = name.unwrap_or_else(random_name);
+        let created_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
         Self {
             id,
             name,
@@ -83,6 +89,7 @@ impl VmConfig {
             state: VmState::Running,
             vcpu_count: DEFAULT_VCPU_COUNT,
             mem_size_mib: DEFAULT_MEM_SIZE_MIB,
+            created_at,
             expose,
         }
     }
@@ -159,9 +166,23 @@ impl VmConfig {
     /// Load config from a VM directory
     pub fn load(vm_dir: &Path) -> io::Result<Self> {
         let config_path = vm_dir.join("config.json");
-        let json = fs::read_to_string(config_path)?;
-        serde_json::from_str(&json)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+        let json = fs::read_to_string(&config_path)?;
+        let mut config: Self = serde_json::from_str(&json)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+        // For backward compatibility: if created_at is 0, use file modification time
+        if config.created_at == 0 {
+            if let Ok(metadata) = fs::metadata(&config_path) {
+                if let Ok(modified) = metadata.modified() {
+                    config.created_at = modified
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+                }
+            }
+        }
+
+        Ok(config)
     }
 }
 
@@ -188,7 +209,7 @@ pub fn random_name() -> String {
     format!("{}-{}", adj, noun)
 }
 
-/// List all VMs by reading config files from BASE_DIR
+/// List all VMs by reading config files from BASE_DIR, sorted by creation date
 pub fn list_vms() -> io::Result<Vec<VmConfig>> {
     let base = PathBuf::from(BASE_DIR);
     if !base.exists() {
@@ -211,6 +232,10 @@ pub fn list_vms() -> io::Result<Vec<VmConfig>> {
             }
         }
     }
+
+    // Sort by creation date (oldest first)
+    vms.sort_by_key(|vm| vm.created_at);
+
     Ok(vms)
 }
 
