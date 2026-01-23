@@ -32,12 +32,12 @@ if [ -f "Gemfile" ]; then
     log "Detected Ruby (Gemfile)"
     if command -v bundle >/dev/null 2>&1; then
         log "Running bundle install..."
-        # Install gems locally to vendor/bundle for isolation
+        # Remove lock file to avoid platform-specific gem issues (macOS -> Linux)
+        rm -f Gemfile.lock
         bundle config set --local path 'vendor/bundle'
         bundle config set --local without 'development test'
         if ! bundle install >> "$LOG" 2>&1; then
             log "Warning: bundle install had issues"
-            # Show last few lines of log for debugging
             tail -5 "$LOG" | while read line; do log "  $line"; done
         fi
     else

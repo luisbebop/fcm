@@ -65,17 +65,39 @@ do_start() {
 
     cd "$APP_DIR"
 
+    # Load .env file if it exists
+    if [ -f "$APP_DIR/.env" ]; then
+        log "Loading .env file..."
+        set -a
+        . "$APP_DIR/.env"
+        set +a
+    fi
+
     # Start the process in background with required environment variables
     # Set PATH to include pip-installed binaries
     # Set production mode for Rails/Rack apps
     export PORT
     export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
-    export RAILS_ENV=production
-    export RACK_ENV=production
-    export NODE_ENV=production
+    export RAILS_ENV="${RAILS_ENV:-production}"
+    export RACK_ENV="${RACK_ENV:-production}"
+    export NODE_ENV="${NODE_ENV:-production}"
+    export DISABLE_BOOTSNAP="${DISABLE_BOOTSNAP:-}"
     # Generate SECRET_KEY_BASE if not set (required for Rails production)
     export SECRET_KEY_BASE="${SECRET_KEY_BASE:-$(head -c 64 /dev/urandom | base64 | tr -d '\n')}"
-    nohup sh -c "$cmd" >> "$LOG_FILE" 2>&1 &
+
+    # Use env to explicitly pass all needed variables to subprocess
+    nohup env \
+        PORT="$PORT" \
+        PATH="$PATH" \
+        RAILS_ENV="$RAILS_ENV" \
+        RACK_ENV="$RACK_ENV" \
+        NODE_ENV="$NODE_ENV" \
+        SECRET_KEY_BASE="$SECRET_KEY_BASE" \
+        JWT_SECRET_KEY="${JWT_SECRET_KEY:-}" \
+        REDIS_URL="${REDIS_URL:-}" \
+        NOTIFIER_SERVICE_TOKEN="${NOTIFIER_SERVICE_TOKEN:-}" \
+        DISABLE_BOOTSNAP="${DISABLE_BOOTSNAP:-}" \
+        sh -c "$cmd" >> "$LOG_FILE" 2>&1 &
     local pid=$!
 
     echo "$pid" > "$PID_FILE"
