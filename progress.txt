@@ -1010,5 +1010,20 @@
 - All 97 tests pass with zero warnings
 - Commit: 07c36f9
 
+### Task 62: Require SSH Key for VM Creation
+- Fixed "Permission denied (publickey)" error when users without SSH keys tried git push
+- Problem: Previously showed warning if no SSH key found but created VM anyway
+- Users couldn't push because server requires publickey auth for git
+- client.rs:
+  - Changed create_vm() to require SSH key instead of optional
+  - Shows clear error message with instructions when no key found:
+    - "No SSH key found"
+    - "An SSH key is required for git push deployment."
+    - "Generate one with: ssh-keygen -t ed25519"
+    - "Then run fcm create again."
+  - Fails early with helpful guidance instead of creating unusable VM
+- All 97 tests pass with zero warnings
+- Commit: fe760bd
+
 ## Next Tasks
 - None - all PRD features implemented
