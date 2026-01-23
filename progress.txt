@@ -1250,5 +1250,19 @@
 - All 103 tests pass with zero warnings
 - Commit: 279fa63
 
+### Task 74: Reduce Base Image Size by Removing LLVM Bloat
+- Identified that postgresql-dev was pulling in LLVM (~385MB) as a dependency
+- LLVM is needed for PostgreSQL's server-side JIT, but we only need client libraries
+- rootfs/Dockerfile:
+  - Changed `postgresql-dev` to `libpq-dev`
+  - libpq-dev provides only the client libraries needed for the pg gem
+- Rebuilt base-rootfs.img:
+  - Before: 452.9 MiB in packages → ~1.4GB on disk with swap
+  - After: 453 MiB in packages → ~500MB on disk with swap
+- VM disk usage reduced from 1412MB to 496MB (916MB savings per VM)
+- All runtimes still work: Ruby 3.4.8, Python 3.12.12, Node.js 24.13.0
+- All 103 tests pass
+- Commit: c2b4438
+
 ## Next Tasks
 (none - project complete per PRD)
