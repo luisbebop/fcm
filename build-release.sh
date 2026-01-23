@@ -52,21 +52,6 @@ else
     echo "  Skipping (cargo-zigbuild not installed)"
 fi
 
-# Build macOS x86_64 (Intel)
-echo "Building darwin-x86_64..."
-if command -v cargo-zigbuild &> /dev/null; then
-    cargo zigbuild --release --target x86_64-apple-darwin 2>/dev/null || {
-        echo "  Warning: macOS x86_64 build failed (may need zig)"
-    }
-    if [ -f "target/x86_64-apple-darwin/release/fcm" ]; then
-        DARWIN_X86_PKG="fcm-${COMMIT}-darwin-x86_64.tar.gz"
-        tar -czf "/tmp/$DARWIN_X86_PKG" -C "target/x86_64-apple-darwin/release" fcm
-        sudo mv "/tmp/$DARWIN_X86_PKG" "$RELEASES_DIR/"
-        echo "  -> $RELEASES_DIR/$DARWIN_X86_PKG"
-    fi
-else
-    echo "  Skipping (cargo-zigbuild not installed)"
-fi
 
 echo ""
 echo "Done! Releases available at: $RELEASES_DIR"

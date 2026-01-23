@@ -478,9 +478,8 @@ fn generate_status_html(stats: &DaemonStats, user: Option<&UserRecord>) -> Strin
             .iter()
             .map(|r| {
                 let platform_name = match r.platform.as_str() {
-                    "darwin-arm64" => "macOS (Apple Silicon)",
-                    "darwin-x86_64" => "macOS (Intel)",
-                    "linux-x86_64" => "Linux (x86_64)",
+                    "darwin-arm64" => "macOS",
+                    "linux-x86_64" => "Linux",
                     "linux-aarch64" => "Linux (ARM64)",
                     _ => &r.platform,
                 };
