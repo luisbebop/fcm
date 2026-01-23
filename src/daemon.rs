@@ -499,7 +499,7 @@ fn generate_status_html(stats: &DaemonStats, user: Option<&UserRecord>) -> Strin
         let version_info = if build_time.is_empty() {
             format!("<code>{}</code>", &current_commit[..7.min(current_commit.len())])
         } else {
-            format!("<code>{}</code> · {}", &current_commit[..7.min(current_commit.len())], build_time)
+            format!("<code>{}</code> · <code>{}</code>", &current_commit[..7.min(current_commit.len())], build_time)
         };
 
         format!(
