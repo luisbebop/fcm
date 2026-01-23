@@ -6,12 +6,13 @@ use crate::session::{attach_to_session, SessionError, SessionInfo, SessionManage
 use crate::vm::{self, VmConfig, VmError, VmState, BASE_DIR};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::error::Error;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Instant;
 use tiny_http::{Header, Method, Request, Response, Server};
@@ -68,8 +69,154 @@ impl DaemonStats {
     }
 }
 
+/// Google OAuth2 configuration
+const GOOGLE_CLIENT_ID: &str = "GOOGLE_CLIENT_ID_PLACEHOLDER";
+const GOOGLE_CLIENT_SECRET: &str = "GOOGLE_CLIENT_SECRET_PLACEHOLDER";
+const OAUTH_CALLBACK_PATH: &str = "/oauth2/callback";
+
+/// User info from Google OAuth
+#[derive(Debug, Clone, Deserialize)]
+struct GoogleUserInfo {
+    #[allow(dead_code)]
+    id: String,
+    #[allow(dead_code)]
+    email: String,
+    name: String,
+    #[allow(dead_code)]
+    picture: Option<String>,
+}
+
+/// Google OAuth token response
+#[derive(Debug, Deserialize)]
+struct GoogleTokenResponse {
+    access_token: String,
+    #[allow(dead_code)]
+    token_type: String,
+    #[allow(dead_code)]
+    expires_in: u64,
+}
+
+/// Session store for OAuth users
+type SessionStore = Arc<Mutex<HashMap<String, GoogleUserInfo>>>;
+
+/// Generate a random session ID
+fn generate_session_id() -> String {
+    let mut rng = rand::thread_rng();
+    (0..32)
+        .map(|_| {
+            let idx = rng.gen_range(0..62);
+            if idx < 10 {
+                (b'0' + idx) as char
+            } else if idx < 36 {
+                (b'a' + idx - 10) as char
+            } else {
+                (b'A' + idx - 36) as char
+            }
+        })
+        .collect()
+}
+
+/// URL encode a string
+fn url_encode(s: &str) -> String {
+    let mut encoded = String::new();
+    for c in s.chars() {
+        match c {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | '.' | '~' => encoded.push(c),
+            _ => {
+                for byte in c.to_string().as_bytes() {
+                    encoded.push_str(&format!("%{:02X}", byte));
+                }
+            }
+        }
+    }
+    encoded
+}
+
+/// URL decode a string
+fn url_decode(s: &str) -> String {
+    let mut result = String::new();
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '%' {
+            let hex: String = chars.by_ref().take(2).collect();
+            if let Ok(byte) = u8::from_str_radix(&hex, 16) {
+                result.push(byte as char);
+            }
+        } else if c == '+' {
+            result.push(' ');
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
+/// Parse query string into key-value pairs
+fn parse_query_string(query: &str) -> HashMap<String, String> {
+    let mut params = HashMap::new();
+    for pair in query.split('&') {
+        if let Some((key, value)) = pair.split_once('=') {
+            params.insert(url_decode(key), url_decode(value));
+        }
+    }
+    params
+}
+
+/// Parse cookies from Cookie header
+fn parse_cookies(cookie_header: &str) -> HashMap<String, String> {
+    let mut cookies = HashMap::new();
+    for cookie in cookie_header.split(';') {
+        let cookie = cookie.trim();
+        if let Some((name, value)) = cookie.split_once('=') {
+            cookies.insert(name.trim().to_string(), value.trim().to_string());
+        }
+    }
+    cookies
+}
+
+/// Exchange OAuth code for access token
+fn exchange_code_for_token(code: &str, redirect_uri: &str) -> Result<GoogleTokenResponse, String> {
+    let body = format!(
+        "code={}&client_id={}&client_secret={}&redirect_uri={}&grant_type=authorization_code",
+        url_encode(code),
+        url_encode(GOOGLE_CLIENT_ID),
+        url_encode(GOOGLE_CLIENT_SECRET),
+        url_encode(redirect_uri)
+    );
+
+    let response = ureq::post("https://oauth2.googleapis.com/token")
+        .set("Content-Type", "application/x-www-form-urlencoded")
+        .send_string(&body)
+        .map_err(|e| format!("Token exchange failed: {}", e))?;
+
+    response
+        .into_json::<GoogleTokenResponse>()
+        .map_err(|e| format!("Failed to parse token response: {}", e))
+}
+
+/// Fetch user info from Google
+fn fetch_google_user_info(access_token: &str) -> Result<GoogleUserInfo, String> {
+    let response = ureq::get("https://www.googleapis.com/oauth2/v2/userinfo")
+        .set("Authorization", &format!("Bearer {}", access_token))
+        .call()
+        .map_err(|e| format!("Failed to fetch user info: {}", e))?;
+
+    response
+        .into_json::<GoogleUserInfo>()
+        .map_err(|e| format!("Failed to parse user info: {}", e))
+}
+
+/// Build Google OAuth authorization URL
+fn build_google_auth_url(redirect_uri: &str) -> String {
+    format!(
+        "https://accounts.google.com/o/oauth2/v2/auth?client_id={}&redirect_uri={}&response_type=code&scope=email%20profile",
+        url_encode(GOOGLE_CLIENT_ID),
+        url_encode(redirect_uri)
+    )
+}
+
 /// Generate the status page HTML
-fn generate_status_html(stats: &DaemonStats) -> String {
+fn generate_status_html(stats: &DaemonStats, user: Option<&GoogleUserInfo>) -> String {
     // Get VM list
     let vms = vm::list_vms().unwrap_or_default();
     let running_count = vms.iter().filter(|v| v.state == VmState::Running).count();
@@ -92,6 +239,22 @@ fn generate_status_html(stats: &DaemonStats) -> String {
                 )
             })
             .collect()
+    };
+
+    // Build auth section (login button or welcome message)
+    let auth_section = match user {
+        Some(u) => format!(
+            r#"<div style="float:right;font-size:0.9em;">Welcome, <b>{}</b> | <a href="/logout">Logout</a></div>"#,
+            html_escape(&u.name)
+        ),
+        None => {
+            let redirect_uri = format!("https://fcm.{}.sslip.io{}", stats.server_ip.replace('.', "-"), OAUTH_CALLBACK_PATH);
+            let auth_url = build_google_auth_url(&redirect_uri);
+            format!(
+                r#"<div style="float:right;"><a href="{}" style="display:inline-block;padding:8px 16px;background:#4285f4;color:#fff;text-decoration:none;border-radius:4px;font-size:0.9em;">Login with Google</a></div>"#,
+                auth_url
+            )
+        }
     };
 
     format!(
@@ -155,7 +318,8 @@ fn generate_status_html(stats: &DaemonStats) -> String {
     </style>
 </head>
 <body>
-    <h1>fcm</h1>
+    {}
+    <h1 style="clear:both;">fcm</h1>
 
     <p>
         fcm is a Firecracker VM manager that gives you Heroku-style deploys on bare metal.
@@ -186,12 +350,22 @@ $ git push origin main</pre>
     </p>
 </body>
 </html>"##,
+        auth_section,
         stats.server_ip,
         stats.format_uptime(),
         running_count,
         stopped_count,
         vm_rows
     )
+}
+
+/// HTML escape a string to prevent XSS
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#x27;")
 }
 
 /// Terminal connect request from client
@@ -829,8 +1003,66 @@ fn proxy_terminal_io(
     let _ = stdout_handle.join();
 }
 
+/// Parse HTTP request and extract method, path, headers
+fn parse_http_request(buf: &[u8]) -> Option<(String, String, HashMap<String, String>)> {
+    let request_str = String::from_utf8_lossy(buf);
+    let mut lines = request_str.lines();
+
+    // Parse request line (e.g., "GET /path HTTP/1.1")
+    let request_line = lines.next()?;
+    let parts: Vec<&str> = request_line.split_whitespace().collect();
+    if parts.len() < 2 {
+        return None;
+    }
+    let method = parts[0].to_string();
+    let path = parts[1].to_string();
+
+    // Parse headers
+    let mut headers = HashMap::new();
+    for line in lines {
+        if line.is_empty() {
+            break;
+        }
+        if let Some((key, value)) = line.split_once(':') {
+            headers.insert(key.trim().to_lowercase(), value.trim().to_string());
+        }
+    }
+
+    Some((method, path, headers))
+}
+
+/// Send HTTP redirect response
+fn send_redirect(stream: &mut TcpStream, location: &str, set_cookie: Option<&str>) {
+    let cookie_header = set_cookie
+        .map(|c| format!("Set-Cookie: {}\r\n", c))
+        .unwrap_or_default();
+    let response = format!(
+        "HTTP/1.1 302 Found\r\nLocation: {}\r\n{}Connection: close\r\n\r\n",
+        location, cookie_header
+    );
+    let _ = stream.write_all(response.as_bytes());
+}
+
+/// Send HTTP HTML response
+fn send_html_response(stream: &mut TcpStream, status: u16, html: &str, set_cookie: Option<&str>) {
+    let status_text = match status {
+        200 => "OK",
+        400 => "Bad Request",
+        500 => "Internal Server Error",
+        _ => "OK",
+    };
+    let cookie_header = set_cookie
+        .map(|c| format!("Set-Cookie: {}\r\n", c))
+        .unwrap_or_default();
+    let response = format!(
+        "HTTP/1.1 {} {}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\n{}Connection: close\r\n\r\n{}",
+        status, status_text, html.len(), cookie_header, html
+    );
+    let _ = stream.write_all(response.as_bytes());
+}
+
 /// Run the status page server (port 7780)
-fn run_status_server(stats: Arc<DaemonStats>) {
+fn run_status_server(stats: Arc<DaemonStats>, sessions: SessionStore) {
     let bind_addr = format!("0.0.0.0:{}", STATUS_PAGE_PORT);
     let listener = match TcpListener::bind(&bind_addr) {
         Ok(l) => l,
@@ -844,19 +1076,109 @@ fn run_status_server(stats: Arc<DaemonStats>) {
 
     for mut stream in listener.incoming().flatten() {
         let stats = Arc::clone(&stats);
+        let sessions = Arc::clone(&sessions);
         thread::spawn(move || {
-            // Read HTTP request (we don't parse it, just serve the page)
-            let mut buf = [0u8; 1024];
-            let _ = stream.read(&mut buf);
+            // Read HTTP request
+            let mut buf = [0u8; 4096];
+            let n = match stream.read(&mut buf) {
+                Ok(n) => n,
+                Err(_) => return,
+            };
 
-            // Generate and send response
-            let html = generate_status_html(&stats);
-            let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                html.len(),
-                html
-            );
-            let _ = stream.write_all(response.as_bytes());
+            // Parse request
+            let (method, path, headers) = match parse_http_request(&buf[..n]) {
+                Some(parsed) => parsed,
+                None => return,
+            };
+
+            // Get cookies
+            let cookies = headers
+                .get("cookie")
+                .map(|c| parse_cookies(c))
+                .unwrap_or_default();
+
+            // Get session from cookie
+            let session_id = cookies.get("fcm_session").cloned();
+            let user = session_id
+                .as_ref()
+                .and_then(|sid| sessions.lock().ok()?.get(sid).cloned());
+
+            // Route request
+            let base_url = format!("https://fcm.{}.sslip.io", stats.server_ip.replace('.', "-"));
+
+            if method == "GET" {
+                // Handle OAuth callback
+                if path.starts_with(OAUTH_CALLBACK_PATH) {
+                    let query = path
+                        .split_once('?')
+                        .map(|(_, q)| q)
+                        .unwrap_or("");
+                    let params = parse_query_string(query);
+
+                    if let Some(code) = params.get("code") {
+                        let redirect_uri = format!("{}{}", base_url, OAUTH_CALLBACK_PATH);
+
+                        // Exchange code for token
+                        match exchange_code_for_token(code, &redirect_uri) {
+                            Ok(token_response) => {
+                                // Fetch user info
+                                match fetch_google_user_info(&token_response.access_token) {
+                                    Ok(user_info) => {
+                                        // Create session
+                                        let new_session_id = generate_session_id();
+                                        if let Ok(mut sessions) = sessions.lock() {
+                                            sessions.insert(new_session_id.clone(), user_info);
+                                        }
+
+                                        // Redirect to home with session cookie
+                                        let cookie = format!(
+                                            "fcm_session={}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=604800",
+                                            new_session_id
+                                        );
+                                        send_redirect(&mut stream, &base_url, Some(&cookie));
+                                        return;
+                                    }
+                                    Err(e) => {
+                                        eprintln!("Failed to fetch user info: {}", e);
+                                        let html = format!("<html><body><h1>Login Failed</h1><p>{}</p><a href=\"{}\">Try again</a></body></html>", html_escape(&e), base_url);
+                                        send_html_response(&mut stream, 500, &html, None);
+                                        return;
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("Token exchange failed: {}", e);
+                                let html = format!("<html><body><h1>Login Failed</h1><p>{}</p><a href=\"{}\">Try again</a></body></html>", html_escape(&e), base_url);
+                                send_html_response(&mut stream, 500, &html, None);
+                                return;
+                            }
+                        }
+                    } else if let Some(error) = params.get("error") {
+                        let html = format!("<html><body><h1>Login Failed</h1><p>Error: {}</p><a href=\"{}\">Go back</a></body></html>", html_escape(error), base_url);
+                        send_html_response(&mut stream, 400, &html, None);
+                        return;
+                    }
+                }
+
+                // Handle logout
+                if path == "/logout" {
+                    // Remove session
+                    if let Some(sid) = session_id {
+                        if let Ok(mut sessions) = sessions.lock() {
+                            sessions.remove(&sid);
+                        }
+                    }
+
+                    // Clear cookie and redirect
+                    let cookie = "fcm_session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0";
+                    send_redirect(&mut stream, &base_url, Some(cookie));
+                    return;
+                }
+            }
+
+            // Generate and send status page
+            let html = generate_status_html(&stats, user.as_ref());
+            send_html_response(&mut stream, 200, &html, None);
         });
     }
 }
@@ -914,6 +1236,9 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     // Create daemon stats for status page
     let stats = Arc::new(DaemonStats::new(server_ip.clone()));
 
+    // Create OAuth session store
+    let oauth_sessions: SessionStore = Arc::new(Mutex::new(HashMap::new()));
+
     // Setup status page domain in Caddy (fcm.{ip}.sslip.io -> localhost:7780)
     let status_domain = caddy::generate_domain("fcm", &server_ip);
     println!("Setting up status page at https://{}", status_domain);
@@ -932,8 +1257,9 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     // Start status page server in a separate thread
     {
         let stats_clone = Arc::clone(&stats);
+        let sessions_clone = Arc::clone(&oauth_sessions);
         thread::spawn(move || {
-            run_status_server(stats_clone);
+            run_status_server(stats_clone, sessions_clone);
         });
     }
 
