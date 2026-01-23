@@ -9,7 +9,7 @@ set -e
 APP_DIR="/app"
 PID_FILE="/var/run/fcm-web.pid"
 LOG_FILE="/var/log/fcm-web.log"
-PORT=8000
+PORT=3000
 
 log() {
     echo "$1"

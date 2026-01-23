@@ -278,10 +278,10 @@ mod tests {
 
     #[test]
     fn test_generate_caddy_block() {
-        let block = generate_caddy_block("myvm.64-34-93-45.sslip.io", "172.16.0.50", 8000);
+        let block = generate_caddy_block("myvm.64-34-93-45.sslip.io", "172.16.0.50", 3000);
         assert!(block.contains("# fcm-managed: myvm.64-34-93-45.sslip.io"));
         assert!(block.contains("myvm.64-34-93-45.sslip.io {"));
-        assert!(block.contains("reverse_proxy 172.16.0.50:8000"));
+        assert!(block.contains("reverse_proxy 172.16.0.50:3000"));
     }
 
     #[test]
@@ -289,12 +289,12 @@ mod tests {
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path().to_str().unwrap();
 
-        add_site_to_file("test.example.com", "172.16.0.50", 8000, path).unwrap();
+        add_site_to_file("test.example.com", "172.16.0.50", 3000, path).unwrap();
 
         let content = fs::read_to_string(path).unwrap();
         assert!(content.contains("# fcm-managed: test.example.com"));
         assert!(content.contains("test.example.com {"));
-        assert!(content.contains("reverse_proxy 172.16.0.50:8000"));
+        assert!(content.contains("reverse_proxy 172.16.0.50:3000"));
     }
 
     #[test]
@@ -305,7 +305,7 @@ mod tests {
         // Write initial content
         fs::write(path, "# Existing Caddyfile\nexample.com {\n    root /var/www\n}\n").unwrap();
 
-        add_site_to_file("test.example.com", "172.16.0.50", 8000, path).unwrap();
+        add_site_to_file("test.example.com", "172.16.0.50", 3000, path).unwrap();
 
         let content = fs::read_to_string(path).unwrap();
         // Should preserve existing content
@@ -313,7 +313,7 @@ mod tests {
         assert!(content.contains("example.com {"));
         // Should add new block
         assert!(content.contains("# fcm-managed: test.example.com"));
-        assert!(content.contains("reverse_proxy 172.16.0.50:8000"));
+        assert!(content.contains("reverse_proxy 172.16.0.50:3000"));
     }
 
     #[test]
@@ -325,7 +325,7 @@ example.com {
 
 # fcm-managed: test.example.com
 test.example.com {
-    reverse_proxy 172.16.0.50:8000
+    reverse_proxy 172.16.0.50:3000
 }
 
 other.com {
@@ -338,7 +338,7 @@ other.com {
         assert!(result.contains("example.com {"));
         assert!(result.contains("other.com {"));
         assert!(!result.contains("# fcm-managed: test.example.com"));
-        assert!(!result.contains("reverse_proxy 172.16.0.50:8000"));
+        assert!(!result.contains("reverse_proxy 172.16.0.50:3000"));
     }
 
     #[test]
@@ -347,7 +347,7 @@ other.com {
         let path = temp_file.path().to_str().unwrap();
 
         // Add a site first
-        add_site_to_file("test.example.com", "172.16.0.50", 8000, path).unwrap();
+        add_site_to_file("test.example.com", "172.16.0.50", 3000, path).unwrap();
 
         // Verify it was added
         let content = fs::read_to_string(path).unwrap();
@@ -367,13 +367,13 @@ other.com {
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path().to_str().unwrap();
 
-        add_site_to_file("site1.example.com", "172.16.0.50", 8000, path).unwrap();
+        add_site_to_file("site1.example.com", "172.16.0.50", 3000, path).unwrap();
         add_site_to_file("site2.example.com", "172.16.0.51", 8001, path).unwrap();
 
         let content = fs::read_to_string(path).unwrap();
         assert!(content.contains("# fcm-managed: site1.example.com"));
         assert!(content.contains("# fcm-managed: site2.example.com"));
-        assert!(content.contains("reverse_proxy 172.16.0.50:8000"));
+        assert!(content.contains("reverse_proxy 172.16.0.50:3000"));
         assert!(content.contains("reverse_proxy 172.16.0.51:8001"));
     }
 
@@ -383,7 +383,7 @@ other.com {
         let path = temp_file.path().to_str().unwrap();
 
         // Add site
-        add_site_to_file("test.example.com", "172.16.0.50", 8000, path).unwrap();
+        add_site_to_file("test.example.com", "172.16.0.50", 3000, path).unwrap();
 
         // Update with different port
         add_site_to_file("test.example.com", "172.16.0.50", 9000, path).unwrap();
@@ -393,7 +393,7 @@ other.com {
         assert_eq!(content.matches("# fcm-managed: test.example.com").count(), 1);
         // Should have new port
         assert!(content.contains("reverse_proxy 172.16.0.50:9000"));
-        assert!(!content.contains("reverse_proxy 172.16.0.50:8000"));
+        assert!(!content.contains("reverse_proxy 172.16.0.50:3000"));
     }
 
     #[test]

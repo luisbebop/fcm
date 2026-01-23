@@ -41,7 +41,7 @@ fcm create
 
 # Push your code
 git init
-echo "web: python3 -m http.server 8000" > Procfile
+echo "web: python3 -m http.server 3000" > Procfile
 echo "<h1>Hello World</h1>" > index.html
 git add . && git commit -m "init"
 git remote add origin root@yourserver.com:cosmic-nova.git
@@ -54,7 +54,7 @@ fcm console
 ## Commands
 
 ```
-fcm create              Create a new VM (random name, port 8000 exposed)
+fcm create              Create a new VM (random name, port 3000 exposed)
 fcm ls                  List all VMs
 fcm console [vm]        Open persistent console session
 fcm stop [vm]           Stop a VM
@@ -235,7 +235,7 @@ fcm ls
 │                                                           │
 │  ┌──────────┐   ┌──────────┐   ┌──────────┐               │
 │  │   VM 1   │   │   VM 2   │   │   VM 3   │  Firecracker  │
-│  │  :8000   │   │  :8000   │   │  :8000   │    microVMs   │
+│  │  :3000   │   │  :3000   │   │  :3000   │    microVMs   │
 │  └────┬─────┘   └────┬─────┘   └────┬─────┘               │
 │       │              │              │                     │
 │       └──────────────┼──────────────┘                     │
@@ -275,7 +275,7 @@ fcm auto-detects and installs dependencies:
 | `Gemfile` | `bundle install` |
 | `package.json` | `npm install` |
 
-The web process runs with `PORT=8000`.
+The web process runs with `PORT=3000`.
 
 ## VM Specs
 

@@ -19,7 +19,7 @@ simple token-based auth:
 ## commands
 
 ```
-fcm create                    # create vm with random name, expose port 8000
+fcm create                    # create vm with random name, expose port 3000
 fcm ls                        # list vms
 fcm console <vm>              # open persistent console session
 fcm sessions <vm>             # list active sessions for a vm
@@ -174,7 +174,7 @@ heroku-style git push deployment for VMs.
 4. post-receive hook syncs code to VM's `/app` directory
 5. auto-detects dependencies (Gemfile, requirements.txt, package.json)
 6. runs install commands (bundle install, pip install, npm install)
-7. parses Procfile and starts web process with `PORT=8000`
+7. parses Procfile and starts web process with `PORT=3000`
 
 ### procfile format
 
@@ -251,7 +251,7 @@ COPY init /tmp/init
 RUN chmod +x /tmp/init && mv /tmp/init /sbin/init
 ```
 
-init script starts dropbear ssh and a simple http server on port 8000 (shows "hello from fcm VM").
+init script starts dropbear ssh and a simple http server on port 3000 (shows "hello from fcm VM").
 
 build: `docker build + docker export + dd + mkfs.ext4 + tar extract`
 
@@ -279,7 +279,7 @@ build: `docker build + docker export + dd + mkfs.ext4 + tar extract`
   "name": "myvm",
   "ip": "172.16.0.50",
   "state": "running",
-  "expose": {"port": 8000, "domain": "myvm.64-34-93-45.sslip.io"}
+  "expose": {"port": 3000, "domain": "myvm.64-34-93-45.sslip.io"}
 }
 ```
 

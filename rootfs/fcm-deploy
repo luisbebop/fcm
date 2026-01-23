@@ -8,7 +8,7 @@ set -e
 
 APP_DIR="/app"
 LOG="/var/log/fcm-deploy.log"
-PORT=8000
+PORT=3000
 
 log() {
     echo "-----> $1"

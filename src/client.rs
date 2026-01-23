@@ -844,7 +844,7 @@ mod tests {
             "disk_max_mb": 2048,
             "created_at": 1700000000,
             "expose": {
-                "port": 8000,
+                "port": 3000,
                 "domain": "test-vm.64-34-93-45.sslip.io"
             },
             "git_url": "root@myserver.com:test-vm.git"
@@ -857,7 +857,7 @@ mod tests {
         assert_eq!(vm.created_at, 1700000000);
         assert!(vm.expose.is_some());
         let expose = vm.expose.unwrap();
-        assert_eq!(expose.port, 8000);
+        assert_eq!(expose.port, 3000);
         assert_eq!(expose.domain, "test-vm.64-34-93-45.sslip.io");
         assert_eq!(vm.git_url, Some("root@myserver.com:test-vm.git".to_string()));
     }

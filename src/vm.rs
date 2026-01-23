@@ -839,12 +839,12 @@ mod tests {
     #[test]
     fn test_vm_config_with_expose() {
         let expose = ExposeConfig {
-            port: 8000,
+            port: 3000,
             domain: "myvm.64-34-93-45.sslip.io".to_string(),
         };
         let config = VmConfig::new(Some("myvm".to_string()), "172.16.0.50".to_string(), Some(expose), None);
         assert!(config.expose.is_some());
-        assert_eq!(config.expose.as_ref().unwrap().port, 8000);
+        assert_eq!(config.expose.as_ref().unwrap().port, 3000);
     }
 
     #[test]

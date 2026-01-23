@@ -29,7 +29,7 @@ const BIND_ADDR: &str = "0.0.0.0:7777";
 const TERMINAL_BIND_ADDR: &str = "0.0.0.0:7778";
 
 /// Default port to expose for all VMs
-const DEFAULT_EXPOSE_PORT: u16 = 8000;
+const DEFAULT_EXPOSE_PORT: u16 = 3000;
 
 /// Status page HTTP port (internal, proxied by Caddy)
 const STATUS_PAGE_PORT: u16 = 7780;
@@ -611,7 +611,7 @@ fn generate_status_html(stats: &DaemonStats, user: Option<&UserRecord>) -> Strin
     <h2>Deploy</h2>
     <pre>$ fcm login
 $ fcm create
-$ git init && echo "web: python3 -m http.server 8000" > Procfile
+$ git init && echo "web: python3 -m http.server 3000" > Procfile
 $ git add . && git commit -m "init"
 $ git remote add origin root@{}:vm-name.git
 $ git push origin main</pre>
@@ -954,7 +954,7 @@ fn handle_create_vm(mut request: Request, access_level: &AccessLevel) -> Result<
     // Get owner ID from access level
     let owner = access_level.owner_id();
 
-    // Always use random name and expose port 8000 by default
+    // Always use random name and expose port 3000 by default
     match vm::create_vm(None, Some(DEFAULT_EXPOSE_PORT), create_request.ssh_public_key, owner) {
         Ok(config) => {
             let response = VmResponse::from(&config);
@@ -2029,7 +2029,7 @@ mod tests {
 
     #[test]
     fn test_default_expose_port() {
-        assert_eq!(DEFAULT_EXPOSE_PORT, 8000);
+        assert_eq!(DEFAULT_EXPOSE_PORT, 3000);
     }
 
     #[test]
