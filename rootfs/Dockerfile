@@ -5,7 +5,14 @@ RUN apk add --no-cache \
     tmux curl bash iproute2 rng-tools \
     nodejs npm git \
     build-base libffi-dev yaml-dev zlib-dev openssl-dev \
-    tzdata sqlite-dev libpq-dev
+    tzdata sqlite-dev libpq-dev \
+    unzip
+
+# Install Bun runtime
+RUN curl -fsSL https://bun.sh/install | bash && \
+    mv /root/.bun/bin/bun /usr/local/bin/bun && \
+    ln -s /usr/local/bin/bun /usr/local/bin/bunx && \
+    rm -rf /root/.bun
 
 # Configure dropbear SSH and set root password
 RUN mkdir -p /etc/dropbear && \

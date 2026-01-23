@@ -6,6 +6,9 @@
 
 set -e
 
+# Ensure PATH includes common binary locations
+export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
+
 APP_DIR="/app"
 LOG="/var/log/fcm-deploy.log"
 PORT=3000
@@ -56,15 +59,21 @@ if [ -f "requirements.txt" ]; then
 fi
 
 if [ -f "package.json" ]; then
-    log "Detected Node.js (package.json)"
-    if command -v npm >/dev/null 2>&1; then
+    # Check for Bun project (bun.lockb takes priority)
+    if [ -f "bun.lockb" ] && command -v bun >/dev/null 2>&1; then
+        log "Detected Bun (bun.lockb)"
+        log "Running bun install..."
+        bun install --production >> "$LOG" 2>&1 || log "Warning: bun install had issues"
+    elif command -v npm >/dev/null 2>&1; then
+        log "Detected Node.js (package.json)"
         log "Running npm install..."
         npm install --production >> "$LOG" 2>&1 || log "Warning: npm install had issues"
     elif command -v yarn >/dev/null 2>&1; then
+        log "Detected Node.js (package.json)"
         log "Running yarn install..."
         yarn install --production >> "$LOG" 2>&1 || log "Warning: yarn install had issues"
     else
-        log "Warning: npm/yarn not found, skipping Node.js dependencies"
+        log "Warning: npm/yarn/bun not found, skipping dependencies"
     fi
 fi
 
