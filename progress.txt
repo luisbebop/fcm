@@ -1264,5 +1264,35 @@
 - All 103 tests pass
 - Commit: c2b4438
 
+### Task 75: Change Default Web Process Port from 8000 to 3000
+- Changed the default port for web processes in VMs from 8000 to 3000
+- src/daemon.rs:
+  - Updated DEFAULT_EXPOSE_PORT constant from 8000 to 3000
+  - Updated status page HTML example
+  - Updated comment in handle_create_vm()
+  - Updated test assertion
+- rootfs/fcm-runner:
+  - Changed PORT variable from 8000 to 3000
+- rootfs/fcm-deploy:
+  - Changed PORT variable from 8000 to 3000
+- README.md:
+  - Updated Quick Start Procfile example
+  - Updated Commands section description
+  - Updated architecture diagram (:3000 for VM ports)
+  - Updated Procfile documentation
+- PRD.md:
+  - Updated command documentation
+  - Updated Procfile section
+  - Updated init script description
+  - Updated config.json example
+- src/caddy.rs:
+  - Updated all test cases (12 occurrences)
+- src/client.rs:
+  - Updated test JSON and assertions
+- src/vm.rs:
+  - Updated test for ExposeConfig
+- All 103 tests pass with zero clippy warnings
+- Commit: cb2928c
+
 ## Next Tasks
 (none - project complete per PRD)
