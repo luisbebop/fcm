@@ -60,10 +60,30 @@ fcm console [vm]        Open persistent console session
 fcm stop [vm]           Stop a VM
 fcm start [vm]          Start a stopped VM
 fcm destroy [vm]        Delete a VM and its data
+fcm login               Authenticate with Google OAuth
+fcm logout              Remove authentication token
+fcm whoami              Show current user info
 fcm daemon              Run the daemon (requires root)
 ```
 
 When you run `fcm create` in a directory, it saves a `.fcm` file. After that, you can just run `fcm console`, `fcm stop`, etc. without specifying the VM name.
+
+## Authentication
+
+fcm uses Google OAuth for authentication. To get started:
+
+```bash
+# Login with your Google account
+fcm login
+
+# Check your current user
+fcm whoami
+
+# Logout when done
+fcm logout
+```
+
+The login flow opens a browser for Google authentication. Your credentials are stored locally in `~/.fcm-token`.
 
 ## Installation (Bare Metal)
 
@@ -128,7 +148,7 @@ sudo usermod -aG docker $USER
 
 ```bash
 # Clone the repo
-git clone https://github.com/anthropics/fcm.git
+git clone https://github.com/luisbebop/fcm.git
 cd fcm
 
 # Build
@@ -207,30 +227,34 @@ fcm ls
 ## How It Works
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                         Your Server                              │
-│                                                                  │
-│  ┌──────────┐    ┌──────────┐    ┌──────────┐                   │
-│  │   VM 1   │    │   VM 2   │    │   VM 3   │   Firecracker     │
-│  │ :8000    │    │ :8000    │    │ :8000    │   microVMs        │
-│  └────┬─────┘    └────┬─────┘    └────┬─────┘                   │
-│       │               │               │                          │
-│       └───────────────┼───────────────┘                          │
-│                       │ 172.16.0.x                               │
-│                 ┌─────┴─────┐                                    │
-│                 │   fcm0    │  Bridge                            │
-│                 │ 172.16.0.1│                                    │
-│                 └─────┬─────┘                                    │
-│                       │ NAT                                      │
-│  ┌────────────────────┼────────────────────┐                    │
-│  │                 Caddy                    │                    │
-│  │  vm1.1-2-3-4.sslip.io -> 172.16.0.50   │  Auto SSL          │
-│  │  vm2.1-2-3-4.sslip.io -> 172.16.0.51   │                    │
-│  └────────────────────┬────────────────────┘                    │
-│                       │ :443                                     │
-└───────────────────────┼─────────────────────────────────────────┘
-                        │
-                    Internet
+┌───────────────────────────────────────────────────────────────┐
+│                          Your Server                          │
+├───────────────────────────────────────────────────────────────┤
+│                                                               │
+│    ┌──────────┐    ┌──────────┐    ┌──────────┐              │
+│    │   VM 1   │    │   VM 2   │    │   VM 3   │  Firecracker │
+│    │  :8000   │    │  :8000   │    │  :8000   │    microVMs  │
+│    └────┬─────┘    └────┬─────┘    └────┬─────┘              │
+│         │               │               │                     │
+│         └───────────────┼───────────────┘                     │
+│                         │                                     │
+│                   ┌─────┴─────┐                               │
+│                   │   fcm0    │  Bridge (172.16.0.1)          │
+│                   └─────┬─────┘                               │
+│                         │                                     │
+│                        NAT                                    │
+│                         │                                     │
+│    ┌────────────────────┴────────────────────┐               │
+│    │                 Caddy                    │               │
+│    │  vm1.1-2-3-4.sslip.io → 172.16.0.50:8000│  Reverse      │
+│    │  vm2.1-2-3-4.sslip.io → 172.16.0.51:8000│  Proxy + SSL  │
+│    └────────────────────┬────────────────────┘               │
+│                         │                                     │
+└─────────────────────────┼─────────────────────────────────────┘
+                          │
+                       :443
+                          │
+                      Internet
 ```
 
 ## Procfile
