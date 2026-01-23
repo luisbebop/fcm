@@ -55,6 +55,12 @@ enum Commands {
         /// VM name or ID (defaults to .fcm config)
         vm: Option<String>,
     },
+    /// Authenticate with Google
+    Login,
+    /// Remove authentication token
+    Logout,
+    /// Show current user info
+    Whoami,
     /// Run the daemon (requires root)
     Daemon,
 }
@@ -132,6 +138,24 @@ fn main() {
             };
             if let Err(e) = client::destroy_vm(&vm_name) {
                 eprintln!("Error destroying VM: {}", e);
+                std::process::exit(1);
+            }
+        }
+        Some(Commands::Login) => {
+            if let Err(e) = client::login() {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
+        }
+        Some(Commands::Logout) => {
+            if let Err(e) = client::logout() {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
+        }
+        Some(Commands::Whoami) => {
+            if let Err(e) = client::whoami() {
+                eprintln!("Error: {}", e);
                 std::process::exit(1);
             }
         }

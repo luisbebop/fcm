@@ -5,9 +5,13 @@ use serde::{Deserialize, Serialize};
 use std::env;
 use std::error::Error;
 use std::fs;
+use std::io::{BufRead, BufReader, Write};
+use std::net::TcpListener;
 use std::path::PathBuf;
 
 const DEFAULT_DAEMON_URL: &str = "http://127.0.0.1:7777";
+/// Port for local CLI login callback server
+const CLI_LOGIN_PORT: u16 = 9876;
 const LOCAL_CONFIG_FILE: &str = ".fcm";
 
 /// Local project config that links a directory to a VM
@@ -508,6 +512,233 @@ pub fn start_vm(vm: &str) -> Result<(), Box<dyn Error>> {
 pub fn destroy_vm(vm: &str) -> Result<(), Box<dyn Error>> {
     make_request("DELETE", &format!("/vms/{}", vm), None)?;
     println!("Destroyed VM '{}'", vm);
+    Ok(())
+}
+
+/// Response from /auth/me endpoint
+#[derive(Debug, Deserialize)]
+struct AuthMeResponse {
+    email: String,
+    name: String,
+    #[allow(dead_code)]
+    is_admin: bool,
+}
+
+/// Get FCM status page URL from FCM_HOST
+fn status_page_url() -> String {
+    if let Ok(host) = env::var("FCM_HOST") {
+        // Extract hostname from FCM_HOST (strip scheme and port)
+        let host = host.trim_start_matches("http://").trim_start_matches("https://");
+        let hostname = host.split(':').next().unwrap_or(host);
+        // Convert IP to sslip.io format
+        let sslip_hostname = hostname.replace('.', "-");
+        format!("https://fcm.{}.sslip.io", sslip_hostname)
+    } else {
+        // Default to localhost - won't work for OAuth but needed for local testing
+        "http://127.0.0.1:7780".to_string()
+    }
+}
+
+/// Open a URL in the default browser
+fn open_browser(url: &str) -> Result<(), Box<dyn Error>> {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open").arg(url).spawn()?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // Try xdg-open first, then sensible-browser
+        if std::process::Command::new("xdg-open").arg(url).spawn().is_err() {
+            std::process::Command::new("sensible-browser").arg(url).spawn()?;
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd").args(["/C", "start", url]).spawn()?;
+    }
+    Ok(())
+}
+
+/// Parse query string from URL path
+fn parse_query_params(query: &str) -> std::collections::HashMap<String, String> {
+    let mut params = std::collections::HashMap::new();
+    for pair in query.split('&') {
+        if let Some((key, value)) = pair.split_once('=') {
+            // URL decode the value
+            let decoded = value
+                .replace('+', " ")
+                .replace("%40", "@")
+                .replace("%2B", "+")
+                .replace("%20", " ")
+                .replace("%3D", "=")
+                .replace("%26", "&")
+                .replace("%3F", "?");
+            params.insert(key.to_string(), decoded);
+        }
+    }
+    params
+}
+
+/// Authenticate with Google via OAuth flow
+pub fn login() -> Result<(), Box<dyn Error>> {
+    // Check if already logged in
+    if let Ok(token) = load_token() {
+        if token.starts_with("fcm_") {
+            println!("Already logged in. Run 'fcm logout' first to login as a different user.");
+            return Ok(());
+        }
+    }
+
+    let base_url = status_page_url();
+
+    // Check FCM_HOST is set for remote connections
+    if !base_url.contains("sslip.io") {
+        return Err("FCM_HOST must be set to the server IP (e.g., FCM_HOST=64.34.93.45:7777)".into());
+    }
+
+    // Start local server to receive callback
+    let listener = TcpListener::bind(format!("127.0.0.1:{}", CLI_LOGIN_PORT))
+        .map_err(|e| format!("Failed to start local server on port {}: {}", CLI_LOGIN_PORT, e))?;
+
+    // Build login URL
+    let login_url = format!("{}/cli-login?port={}", base_url, CLI_LOGIN_PORT);
+
+    println!("Opening browser for login...");
+    println!("If browser doesn't open, visit: {}", login_url);
+
+    // Open browser
+    let _ = open_browser(&login_url);
+
+    // Wait for callback with token
+    println!("Waiting for authentication...");
+
+    // Set a timeout on the listener
+    listener.set_nonblocking(false)?;
+
+    for stream in listener.incoming() {
+        match stream {
+            Ok(mut stream) => {
+                // Read HTTP request
+                let mut reader = BufReader::new(&stream);
+                let mut request_line = String::new();
+                reader.read_line(&mut request_line)?;
+
+                // Parse the request path
+                let parts: Vec<&str> = request_line.split_whitespace().collect();
+                if parts.len() < 2 {
+                    continue;
+                }
+                let path = parts[1];
+
+                // Check if this is the callback
+                if path.starts_with("/callback") {
+                    // Parse query parameters
+                    let query = path.split_once('?').map(|(_, q)| q).unwrap_or("");
+                    let params = parse_query_params(query);
+
+                    if let Some(token) = params.get("token") {
+                        // Save token to file
+                        let token_file = token_path();
+                        fs::write(&token_file, token)?;
+
+                        // Set restrictive permissions
+                        #[cfg(unix)]
+                        {
+                            use std::os::unix::fs::PermissionsExt;
+                            fs::set_permissions(&token_file, fs::Permissions::from_mode(0o600))?;
+                        }
+
+                        // Get user info (name, email) from params
+                        let name = params.get("name").cloned().unwrap_or_else(|| "User".to_string());
+                        let email = params.get("email").cloned().unwrap_or_else(|| "unknown".to_string());
+
+                        // Send success response to browser
+                        let success_html = r#"<!DOCTYPE html>
+<html>
+<head><title>Login Successful</title></head>
+<body style="font-family: Georgia, serif; max-width: 500px; margin: 100px auto; text-align: center;">
+<h1>✓ Login Successful</h1>
+<p>You can close this tab and return to the terminal.</p>
+</body>
+</html>"#;
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            success_html.len(),
+                            success_html
+                        );
+                        let _ = stream.write_all(response.as_bytes());
+                        let _ = stream.flush();
+
+                        println!();
+                        println!("Logged in as {} ({})", name, email);
+                        return Ok(());
+                    } else if let Some(error) = params.get("error") {
+                        // Send error response to browser
+                        let error_html = format!(r#"<!DOCTYPE html>
+<html>
+<head><title>Login Failed</title></head>
+<body style="font-family: Georgia, serif; max-width: 500px; margin: 100px auto; text-align: center;">
+<h1>✗ Login Failed</h1>
+<p>{}</p>
+</body>
+</html>"#, error);
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            error_html.len(),
+                            error_html
+                        );
+                        let _ = stream.write_all(response.as_bytes());
+                        let _ = stream.flush();
+
+                        return Err(format!("Login failed: {}", error).into());
+                    }
+                }
+
+                // Send a simple response for any other request
+                let response = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                let _ = stream.write_all(response.as_bytes());
+            }
+            Err(e) => {
+                return Err(format!("Connection error: {}", e).into());
+            }
+        }
+    }
+
+    Err("Login callback not received".into())
+}
+
+/// Remove authentication token
+pub fn logout() -> Result<(), Box<dyn Error>> {
+    let path = token_path();
+    if path.exists() {
+        fs::remove_file(&path)?;
+        println!("Logged out successfully");
+    } else {
+        println!("Not logged in");
+    }
+    Ok(())
+}
+
+/// Show current user info
+pub fn whoami() -> Result<(), Box<dyn Error>> {
+    let token = load_token()?;
+
+    // Check if using legacy daemon token vs user token
+    if !token.starts_with("fcm_") {
+        println!("Using legacy daemon token (admin access)");
+        return Ok(());
+    }
+
+    // Get user info from daemon
+    let response = make_request("GET", "/auth/me", None)?;
+    let user: AuthMeResponse = response.into_json()?;
+
+    println!("{}", user.name);
+    println!("{}", user.email);
+    if user.is_admin {
+        println!("(admin)");
+    }
+
     Ok(())
 }
 

@@ -75,15 +75,134 @@ const GOOGLE_CLIENT_SECRET: &str = "GOOGLE_CLIENT_SECRET_PLACEHOLDER";
 const OAUTH_CALLBACK_PATH: &str = "/oauth2/callback";
 
 /// User info from Google OAuth
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct GoogleUserInfo {
-    #[allow(dead_code)]
     id: String,
-    #[allow(dead_code)]
     email: String,
     name: String,
     #[allow(dead_code)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     picture: Option<String>,
+}
+
+/// User database stored in users.json
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct UserDatabase {
+    users: HashMap<String, UserRecord>,
+    tokens: HashMap<String, TokenRecord>,
+}
+
+/// A stored user record
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct UserRecord {
+    id: String,
+    email: String,
+    name: String,
+    created_at: u64,
+    is_admin: bool,
+}
+
+/// A stored token record
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TokenRecord {
+    user_id: String,
+    created_at: u64,
+}
+
+/// User database file path
+fn users_db_path() -> PathBuf {
+    PathBuf::from(BASE_DIR).join("users.json")
+}
+
+/// Load user database from disk
+fn load_user_db() -> UserDatabase {
+    let path = users_db_path();
+    if path.exists() {
+        if let Ok(content) = fs::read_to_string(&path) {
+            if let Ok(db) = serde_json::from_str(&content) {
+                return db;
+            }
+        }
+    }
+    UserDatabase::default()
+}
+
+/// Save user database to disk
+fn save_user_db(db: &UserDatabase) -> Result<(), Box<dyn Error>> {
+    let path = users_db_path();
+    let json = serde_json::to_string_pretty(db)?;
+    fs::write(&path, json)?;
+    // Set restrictive permissions
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
+}
+
+/// Generate a user token (fcm_...)
+fn generate_user_token() -> String {
+    let mut rng = rand::thread_rng();
+    let random: String = (0..32)
+        .map(|_| {
+            let idx = rng.gen_range(0..62);
+            if idx < 10 {
+                (b'0' + idx) as char
+            } else if idx < 36 {
+                (b'a' + idx - 10) as char
+            } else {
+                (b'A' + idx - 36) as char
+            }
+        })
+        .collect();
+    format!("fcm_{}", random)
+}
+
+/// Create or update user from Google info and return a token
+fn create_or_update_user(user_info: &GoogleUserInfo) -> Result<(String, UserRecord), Box<dyn Error>> {
+    let mut db = load_user_db();
+
+    // Check if user exists
+    let is_first_user = db.users.is_empty();
+    let user = if let Some(existing) = db.users.get(&user_info.id) {
+        // Update existing user's name/email but keep is_admin
+        let mut updated = existing.clone();
+        updated.name = user_info.name.clone();
+        updated.email = user_info.email.clone();
+        db.users.insert(user_info.id.clone(), updated.clone());
+        updated
+    } else {
+        // Create new user
+        let user = UserRecord {
+            id: user_info.id.clone(),
+            email: user_info.email.clone(),
+            name: user_info.name.clone(),
+            created_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            is_admin: is_first_user, // First user becomes admin
+        };
+        db.users.insert(user_info.id.clone(), user.clone());
+        user
+    };
+
+    // Generate new token for this login
+    let token = generate_user_token();
+    let token_record = TokenRecord {
+        user_id: user_info.id.clone(),
+        created_at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
+    };
+    db.tokens.insert(token.clone(), token_record);
+
+    // Save database
+    save_user_db(&db)?;
+
+    Ok((token, user))
 }
 
 /// Google OAuth token response
@@ -206,13 +325,18 @@ fn fetch_google_user_info(access_token: &str) -> Result<GoogleUserInfo, String> 
         .map_err(|e| format!("Failed to parse user info: {}", e))
 }
 
-/// Build Google OAuth authorization URL
-fn build_google_auth_url(redirect_uri: &str) -> String {
-    format!(
+/// Build Google OAuth authorization URL with optional state
+fn build_google_auth_url(redirect_uri: &str, state: Option<&str>) -> String {
+    let base = format!(
         "https://accounts.google.com/o/oauth2/v2/auth?client_id={}&redirect_uri={}&response_type=code&scope=email%20profile",
         url_encode(GOOGLE_CLIENT_ID),
         url_encode(redirect_uri)
-    )
+    );
+    if let Some(s) = state {
+        format!("{}&state={}", base, url_encode(s))
+    } else {
+        base
+    }
 }
 
 /// Generate the status page HTML
@@ -249,7 +373,7 @@ fn generate_status_html(stats: &DaemonStats, user: Option<&GoogleUserInfo>) -> S
         ),
         None => {
             let redirect_uri = format!("https://fcm.{}.sslip.io{}", stats.server_ip.replace('.', "-"), OAUTH_CALLBACK_PATH);
-            let auth_url = build_google_auth_url(&redirect_uri);
+            let auth_url = build_google_auth_url(&redirect_uri, None);
             format!(
                 r#"<div style="float:right;"><a href="{}" style="display:inline-block;padding:8px 16px;background:#4285f4;color:#fff;text-decoration:none;border-radius:4px;font-size:0.9em;">Login with Google</a></div>"#,
                 auth_url
@@ -536,18 +660,52 @@ fn load_or_create_token() -> Result<String, Box<dyn Error>> {
     }
 }
 
-/// Validate the Authorization header
-fn validate_auth(request: &Request, token: &str) -> bool {
+/// Extract the bearer token from request
+fn extract_bearer_token(request: &Request) -> Option<String> {
     for header in request.headers() {
         let field_str: &str = header.field.as_str().into();
         if field_str.eq_ignore_ascii_case("authorization") {
             let value: &str = header.value.as_str();
             if let Some(bearer_token) = value.strip_prefix("Bearer ") {
-                return bearer_token.trim() == token;
+                return Some(bearer_token.trim().to_string());
             }
         }
     }
+    None
+}
+
+/// Validate the Authorization header - accepts legacy daemon token or user tokens
+fn validate_auth(request: &Request, daemon_token: &str) -> bool {
+    if let Some(token) = extract_bearer_token(request) {
+        // Check legacy daemon token
+        if token == daemon_token {
+            return true;
+        }
+        // Check user token (starts with fcm_)
+        if token.starts_with("fcm_") {
+            let db = load_user_db();
+            return db.tokens.contains_key(&token);
+        }
+    }
     false
+}
+
+/// Get user from token
+fn get_user_from_token(token: &str) -> Option<UserRecord> {
+    if !token.starts_with("fcm_") {
+        return None;
+    }
+    let db = load_user_db();
+    let token_record = db.tokens.get(token)?;
+    db.users.get(&token_record.user_id).cloned()
+}
+
+/// Response for /auth/me endpoint
+#[derive(Debug, Serialize)]
+struct AuthMeResponse {
+    email: String,
+    name: String,
+    is_admin: bool,
 }
 
 /// Send a JSON response
@@ -748,6 +906,35 @@ fn handle_create_session(
     }
 }
 
+/// Handle GET /auth/me - get current user info
+fn handle_auth_me(request: Request) -> Result<(), Box<dyn Error>> {
+    let token = match extract_bearer_token(&request) {
+        Some(t) => t,
+        None => return send_error(request, 401, "No token provided"),
+    };
+
+    // Check if using legacy daemon token
+    if !token.starts_with("fcm_") {
+        return send_json_response(request, 200, &AuthMeResponse {
+            email: "admin@local".to_string(),
+            name: "Admin (legacy token)".to_string(),
+            is_admin: true,
+        });
+    }
+
+    // Look up user from token
+    match get_user_from_token(&token) {
+        Some(user) => {
+            send_json_response(request, 200, &AuthMeResponse {
+                email: user.email,
+                name: user.name,
+                is_admin: user.is_admin,
+            })
+        }
+        None => send_error(request, 401, "Invalid token"),
+    }
+}
+
 /// Route and handle a request
 fn handle_request(
     request: Request,
@@ -767,6 +954,9 @@ fn handle_request(
 
     // Route request
     match (method, path.as_str()) {
+        // Auth routes
+        (Method::Get, "/auth/me") => handle_auth_me(request),
+
         // VM collection routes
         (Method::Post, "/vms") => handle_create_vm(request),
         (Method::Get, "/vms") => handle_list_vms(request),
@@ -1107,6 +1297,25 @@ fn run_status_server(stats: Arc<DaemonStats>, sessions: SessionStore) {
             let base_url = format!("https://fcm.{}.sslip.io", stats.server_ip.replace('.', "-"));
 
             if method == "GET" {
+                // Handle CLI login initiation
+                if path.starts_with("/cli-login") {
+                    let query = path.split_once('?').map(|(_, q)| q).unwrap_or("");
+                    let params = parse_query_string(query);
+
+                    if let Some(port) = params.get("port") {
+                        // Build OAuth URL with state containing CLI port
+                        let redirect_uri = format!("{}{}", base_url, OAUTH_CALLBACK_PATH);
+                        let state = format!("cli:{}", port);
+                        let auth_url = build_google_auth_url(&redirect_uri, Some(&state));
+                        send_redirect(&mut stream, &auth_url, None);
+                        return;
+                    } else {
+                        let html = "<html><body><h1>Error</h1><p>Missing port parameter</p></body></html>";
+                        send_html_response(&mut stream, 400, html, None);
+                        return;
+                    }
+                }
+
                 // Handle OAuth callback
                 if path.starts_with(OAUTH_CALLBACK_PATH) {
                     let query = path
@@ -1118,44 +1327,107 @@ fn run_status_server(stats: Arc<DaemonStats>, sessions: SessionStore) {
                     if let Some(code) = params.get("code") {
                         let redirect_uri = format!("{}{}", base_url, OAUTH_CALLBACK_PATH);
 
+                        // Check if this is a CLI login (state starts with "cli:")
+                        let cli_port = params.get("state")
+                            .filter(|s| s.starts_with("cli:"))
+                            .and_then(|s| s.strip_prefix("cli:"))
+                            .and_then(|p| p.parse::<u16>().ok());
+
                         // Exchange code for token
                         match exchange_code_for_token(code, &redirect_uri) {
                             Ok(token_response) => {
                                 // Fetch user info
                                 match fetch_google_user_info(&token_response.access_token) {
                                     Ok(user_info) => {
-                                        // Create session
-                                        let new_session_id = generate_session_id();
-                                        if let Ok(mut sessions) = sessions.lock() {
-                                            sessions.insert(new_session_id.clone(), user_info);
-                                        }
+                                        if let Some(port) = cli_port {
+                                            // CLI login flow - create user token and redirect to local server
+                                            match create_or_update_user(&user_info) {
+                                                Ok((user_token, _user)) => {
+                                                    let callback_url = format!(
+                                                        "http://127.0.0.1:{}/callback?token={}&name={}&email={}",
+                                                        port,
+                                                        url_encode(&user_token),
+                                                        url_encode(&user_info.name),
+                                                        url_encode(&user_info.email)
+                                                    );
+                                                    send_redirect(&mut stream, &callback_url, None);
+                                                }
+                                                Err(e) => {
+                                                    let callback_url = format!(
+                                                        "http://127.0.0.1:{}/callback?error={}",
+                                                        port,
+                                                        url_encode(&e.to_string())
+                                                    );
+                                                    send_redirect(&mut stream, &callback_url, None);
+                                                }
+                                            }
+                                        } else {
+                                            // Web login flow - create session cookie
+                                            let new_session_id = generate_session_id();
+                                            if let Ok(mut sessions) = sessions.lock() {
+                                                sessions.insert(new_session_id.clone(), user_info);
+                                            }
 
-                                        // Redirect to home with session cookie
-                                        let cookie = format!(
-                                            "fcm_session={}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=604800",
-                                            new_session_id
-                                        );
-                                        send_redirect(&mut stream, &base_url, Some(&cookie));
+                                            // Redirect to home with session cookie
+                                            let cookie = format!(
+                                                "fcm_session={}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=604800",
+                                                new_session_id
+                                            );
+                                            send_redirect(&mut stream, &base_url, Some(&cookie));
+                                        }
                                         return;
                                     }
                                     Err(e) => {
                                         eprintln!("Failed to fetch user info: {}", e);
-                                        let html = format!("<html><body><h1>Login Failed</h1><p>{}</p><a href=\"{}\">Try again</a></body></html>", html_escape(&e), base_url);
-                                        send_html_response(&mut stream, 500, &html, None);
+                                        if let Some(port) = cli_port {
+                                            let callback_url = format!(
+                                                "http://127.0.0.1:{}/callback?error={}",
+                                                port,
+                                                url_encode(&e)
+                                            );
+                                            send_redirect(&mut stream, &callback_url, None);
+                                        } else {
+                                            let html = format!("<html><body><h1>Login Failed</h1><p>{}</p><a href=\"{}\">Try again</a></body></html>", html_escape(&e), base_url);
+                                            send_html_response(&mut stream, 500, &html, None);
+                                        }
                                         return;
                                     }
                                 }
                             }
                             Err(e) => {
                                 eprintln!("Token exchange failed: {}", e);
-                                let html = format!("<html><body><h1>Login Failed</h1><p>{}</p><a href=\"{}\">Try again</a></body></html>", html_escape(&e), base_url);
-                                send_html_response(&mut stream, 500, &html, None);
+                                if let Some(port) = cli_port {
+                                    let callback_url = format!(
+                                        "http://127.0.0.1:{}/callback?error={}",
+                                        port,
+                                        url_encode(&e)
+                                    );
+                                    send_redirect(&mut stream, &callback_url, None);
+                                } else {
+                                    let html = format!("<html><body><h1>Login Failed</h1><p>{}</p><a href=\"{}\">Try again</a></body></html>", html_escape(&e), base_url);
+                                    send_html_response(&mut stream, 500, &html, None);
+                                }
                                 return;
                             }
                         }
                     } else if let Some(error) = params.get("error") {
-                        let html = format!("<html><body><h1>Login Failed</h1><p>Error: {}</p><a href=\"{}\">Go back</a></body></html>", html_escape(error), base_url);
-                        send_html_response(&mut stream, 400, &html, None);
+                        // Check if this is a CLI login error
+                        let cli_port = params.get("state")
+                            .filter(|s| s.starts_with("cli:"))
+                            .and_then(|s| s.strip_prefix("cli:"))
+                            .and_then(|p| p.parse::<u16>().ok());
+
+                        if let Some(port) = cli_port {
+                            let callback_url = format!(
+                                "http://127.0.0.1:{}/callback?error={}",
+                                port,
+                                url_encode(error)
+                            );
+                            send_redirect(&mut stream, &callback_url, None);
+                        } else {
+                            let html = format!("<html><body><h1>Login Failed</h1><p>Error: {}</p><a href=\"{}\">Go back</a></body></html>", html_escape(error), base_url);
+                            send_html_response(&mut stream, 400, &html, None);
+                        }
                         return;
                     }
                 }
