@@ -573,7 +573,8 @@ fn generate_status_html(stats: &DaemonStats, user: Option<&UserRecord>) -> Strin
     </p>
 {}
     <h2>Deploy</h2>
-    <pre>$ fcm create
+    <pre>$ fcm login
+$ fcm create
 $ git init && echo "web: python3 -m http.server 8000" > Procfile
 $ git add . && git commit -m "init"
 $ git remote add origin root@{}:vm-name.git
