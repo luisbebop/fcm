@@ -148,6 +148,19 @@ pub fn show_local_vm() -> Result<(), Box<dyn Error>> {
     println!("{d}  Commands:{reset}", d = GRAY, reset = RESET);
     println!("    {w}fcm console {}{reset}  {d}# open terminal{reset}", config.name, w = WHITE, d = GRAY, reset = RESET);
     println!("    {w}git push{reset}             {d}# deploy{reset}", w = WHITE, d = GRAY, reset = RESET);
+
+    let koan = random_koan();
+    println!();
+    println!("{bold}{w}  Quick Start:{reset}", bold = BOLD, w = WHITE, reset = RESET);
+    println!();
+    println!("{d}  # Initialize and deploy{reset}", d = GRAY, reset = RESET);
+    println!("  {w}git init{reset}", w = WHITE, reset = RESET);
+    println!("  {w}echo '<h1>{}</h1>' > index.html{reset}", koan, w = WHITE, reset = RESET);
+    println!("  {w}echo 'web: python3 -m http.server $PORT' > Procfile{reset}", w = WHITE, reset = RESET);
+    if let Some(git_url) = &config.git {
+        println!("  {w}git remote add origin {}{reset}", git_url, w = WHITE, reset = RESET);
+    }
+    println!("  {w}git add -A && git commit -m 'init' && git push origin main{reset}", w = WHITE, reset = RESET);
     println!();
 
     Ok(())
