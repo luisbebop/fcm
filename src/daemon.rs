@@ -838,24 +838,22 @@ fn run_status_server(stats: Arc<DaemonStats>) {
 
     println!("Status page server listening on {}", bind_addr);
 
-    for stream in listener.incoming() {
-        if let Ok(mut stream) = stream {
-            let stats = Arc::clone(&stats);
-            thread::spawn(move || {
-                // Read HTTP request (we don't parse it, just serve the page)
-                let mut buf = [0u8; 1024];
-                let _ = stream.read(&mut buf);
+    for mut stream in listener.incoming().flatten() {
+        let stats = Arc::clone(&stats);
+        thread::spawn(move || {
+            // Read HTTP request (we don't parse it, just serve the page)
+            let mut buf = [0u8; 1024];
+            let _ = stream.read(&mut buf);
 
-                // Generate and send response
-                let html = generate_status_html(&stats);
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    html.len(),
-                    html
-                );
-                let _ = stream.write_all(response.as_bytes());
-            });
-        }
+            // Generate and send response
+            let html = generate_status_html(&stats);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                html.len(),
+                html
+            );
+            let _ = stream.write_all(response.as_bytes());
+        });
     }
 }
 
