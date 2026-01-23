@@ -1,5 +1,6 @@
 // Daemon HTTP server module
 
+use crate::caddy;
 use crate::network;
 use crate::session::{attach_to_session, SessionError, SessionInfo, SessionManager};
 use crate::vm::{self, VmConfig, VmError, VmState, BASE_DIR};
@@ -10,7 +11,9 @@ use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::thread;
+use std::time::Instant;
 use tiny_http::{Header, Method, Request, Response, Server};
 
 /// Request to create a VM
@@ -26,6 +29,168 @@ const TERMINAL_BIND_ADDR: &str = "0.0.0.0:7778";
 
 /// Default port to expose for all VMs
 const DEFAULT_EXPOSE_PORT: u16 = 8000;
+
+/// Status page HTTP port (internal, proxied by Caddy)
+const STATUS_PAGE_PORT: u16 = 7780;
+
+/// Daemon statistics for status page
+#[derive(Clone)]
+struct DaemonStats {
+    start_time: Instant,
+    server_ip: String,
+}
+
+impl DaemonStats {
+    fn new(server_ip: String) -> Self {
+        Self {
+            start_time: Instant::now(),
+            server_ip,
+        }
+    }
+
+    fn uptime_secs(&self) -> u64 {
+        self.start_time.elapsed().as_secs()
+    }
+
+    fn format_uptime(&self) -> String {
+        let secs = self.uptime_secs();
+        let days = secs / 86400;
+        let hours = (secs % 86400) / 3600;
+        let mins = (secs % 3600) / 60;
+
+        if days > 0 {
+            format!("{}d {}h {}m", days, hours, mins)
+        } else if hours > 0 {
+            format!("{}h {}m", hours, mins)
+        } else {
+            format!("{}m", mins)
+        }
+    }
+}
+
+/// Generate the status page HTML
+fn generate_status_html(stats: &DaemonStats) -> String {
+    // Get VM list
+    let vms = vm::list_vms().unwrap_or_default();
+    let running_count = vms.iter().filter(|v| v.state == VmState::Running).count();
+    let stopped_count = vms.len() - running_count;
+
+    // Build VM table rows
+    let vm_rows: String = if vms.is_empty() {
+        "<tr><td colspan=\"4\" style=\"text-align:center;color:#666;\">No VMs yet</td></tr>".to_string()
+    } else {
+        vms.iter()
+            .map(|v| {
+                let state_color = if v.state == VmState::Running { "#2d5" } else { "#888" };
+                let state_text = if v.state == VmState::Running { "running" } else { "stopped" };
+                let domain = v.expose.as_ref().map(|e| e.domain.as_str()).unwrap_or("-");
+                format!(
+                    "<tr><td>{}</td><td style=\"color:{}\">{}</td><td>{}</td><td>{}MB</td></tr>",
+                    v.name, state_color, state_text, domain, v.disk_used_mb()
+                )
+            })
+            .collect()
+    };
+
+    format!(
+        r##"<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>fcm</title>
+    <style>
+        body {{
+            font-family: Georgia, serif;
+            max-width: 650px;
+            margin: 40px auto;
+            padding: 0 20px;
+            line-height: 1.6;
+            color: #333;
+            background: #fff;
+        }}
+        h1 {{
+            font-size: 1.5em;
+            border-bottom: 1px solid #ccc;
+            padding-bottom: 10px;
+        }}
+        code {{
+            background: #f4f4f4;
+            padding: 2px 6px;
+            font-size: 0.9em;
+        }}
+        pre {{
+            background: #f4f4f4;
+            padding: 15px;
+            overflow-x: auto;
+            font-size: 0.85em;
+        }}
+        table {{
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+            font-size: 0.9em;
+        }}
+        th, td {{
+            text-align: left;
+            padding: 8px;
+            border-bottom: 1px solid #ddd;
+        }}
+        th {{
+            background: #f9f9f9;
+        }}
+        .stats {{
+            background: #f9f9f9;
+            padding: 15px;
+            margin: 20px 0;
+        }}
+        .stats span {{
+            margin-right: 30px;
+        }}
+        a {{
+            color: #06c;
+        }}
+    </style>
+</head>
+<body>
+    <h1>fcm</h1>
+
+    <p>
+        fcm is a Firecracker VM manager that gives you Heroku-style deploys on bare metal.
+        Create a VM, push your code with git, and it's live with SSL in seconds.
+        Each VM gets 1 vCPU, 1GB RAM, and runs your app via Procfile.
+    </p>
+
+    <h2>Deploy</h2>
+    <pre>$ fcm create
+$ git init && echo "web: python3 -m http.server 8000" > Procfile
+$ git add . && git commit -m "init"
+$ git remote add origin root@{}:vm-name.git
+$ git push origin main</pre>
+
+    <h2>Status</h2>
+    <div class="stats">
+        <span><b>Uptime:</b> {}</span>
+        <span><b>VMs:</b> {} running, {} stopped</span>
+    </div>
+
+    <table>
+        <tr><th>Name</th><th>State</th><th>Domain</th><th>Disk</th></tr>
+        {}
+    </table>
+
+    <p style="margin-top:40px;font-size:0.85em;color:#666;">
+        <a href="https://github.com/anthropics/claude-code">Source</a>
+    </p>
+</body>
+</html>"##,
+        stats.server_ip,
+        stats.format_uptime(),
+        running_count,
+        stopped_count,
+        vm_rows
+    )
+}
 
 /// Terminal connect request from client
 #[derive(Debug, Deserialize)]
@@ -660,6 +825,40 @@ fn proxy_terminal_io(
     let _ = stdout_handle.join();
 }
 
+/// Run the status page server (port 7780)
+fn run_status_server(stats: Arc<DaemonStats>) {
+    let bind_addr = format!("0.0.0.0:{}", STATUS_PAGE_PORT);
+    let listener = match TcpListener::bind(&bind_addr) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("Failed to bind status server to {}: {}", bind_addr, e);
+            return;
+        }
+    };
+
+    println!("Status page server listening on {}", bind_addr);
+
+    for stream in listener.incoming() {
+        if let Ok(mut stream) = stream {
+            let stats = Arc::clone(&stats);
+            thread::spawn(move || {
+                // Read HTTP request (we don't parse it, just serve the page)
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+
+                // Generate and send response
+                let html = generate_status_html(&stats);
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    html.len(),
+                    html
+                );
+                let _ = stream.write_all(response.as_bytes());
+            });
+        }
+    }
+}
+
 /// Run the terminal server (port 7778)
 fn run_terminal_server(token: String, session_manager: SessionManager) {
     let listener = match TcpListener::bind(TERMINAL_BIND_ADDR) {
@@ -707,11 +906,34 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         eprintln!("VM networking may not work correctly");
     }
 
+    // Get server IP for status page domain
+    let server_ip = caddy::get_server_ip().unwrap_or_else(|_| "127.0.0.1".to_string());
+
+    // Create daemon stats for status page
+    let stats = Arc::new(DaemonStats::new(server_ip.clone()));
+
+    // Setup status page domain in Caddy (fcm.{ip}.sslip.io -> localhost:7780)
+    let status_domain = caddy::generate_domain("fcm", &server_ip);
+    println!("Setting up status page at https://{}", status_domain);
+    if let Err(e) = caddy::add_site(&status_domain, "127.0.0.1", STATUS_PAGE_PORT) {
+        eprintln!("Warning: Failed to add status page to Caddy: {}", e);
+    } else if let Err(e) = caddy::reload() {
+        eprintln!("Warning: Failed to reload Caddy: {}", e);
+    }
+
     // Load or create auth token
     let token = load_or_create_token()?;
 
     // Create session manager for persistent console sessions
     let session_manager = SessionManager::new();
+
+    // Start status page server in a separate thread
+    {
+        let stats_clone = Arc::clone(&stats);
+        thread::spawn(move || {
+            run_status_server(stats_clone);
+        });
+    }
 
     // Start terminal server in a separate thread
     {
