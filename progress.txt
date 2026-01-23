@@ -1188,5 +1188,18 @@
 - All 103 tests pass with zero warnings
 - Commit: 97b78fe
 
+### Task 70: Filter Status Page VMs by User Ownership
+- Status page now shows only VMs owned by the logged-in user
+- Not logged in: shows "Login to see your VMs" message in table
+- Admin users (is_admin: true): see all VMs
+- Regular users: see only VMs with matching owner field
+- src/daemon.rs:
+  - Changed generate_status_html() to accept UserRecord instead of GoogleUserInfo
+  - Added VM filtering based on user access level
+  - Look up UserRecord from database to get is_admin status
+  - VM counts in status section also reflect filtered list
+- All 103 tests pass with zero warnings
+- Commit: 3b875dd
+
 ## Next Tasks
 - (none - multi-user auth complete)
