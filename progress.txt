@@ -992,5 +992,23 @@
 - All 97 tests pass with zero warnings
 - Commit: 1dcdce4
 
+### Task 61: Improve Deployment Scripts for Better App Compatibility
+- Fixed platform-specific gem issues when pushing from macOS to Linux VM
+- rootfs/fcm-deploy:
+  - Remove Gemfile.lock before bundle install
+  - Prevents errors from platform-specific gems (macOS -> Linux mismatch)
+- rootfs/fcm-runner:
+  - Added .env file support - loads /app/.env if it exists
+  - Environment variables now use defaults instead of hardcoded values
+  - RAILS_ENV, RACK_ENV, NODE_ENV can be overridden via .env
+  - Added support for common app environment variables:
+    - JWT_SECRET_KEY for JWT authentication
+    - REDIS_URL for Redis connections
+    - NOTIFIER_SERVICE_TOKEN for notification services
+    - DISABLE_BOOTSNAP for Rails bootsnap control
+  - Use explicit `env` command to pass all variables to subprocess
+- All 97 tests pass with zero warnings
+- Commit: 07c36f9
+
 ## Next Tasks
 - None - all PRD features implemented
