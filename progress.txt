@@ -1201,5 +1201,26 @@
 - All 103 tests pass with zero warnings
 - Commit: 3b875dd
 
+### Task 71: CLI Download Links and Commit Hash on Status Page
+- Added releases directory (/var/lib/firecracker/releases/) for versioned binaries
+- Created build-release.sh script for building platform-specific releases:
+  - Linux x86_64 (native build)
+  - macOS ARM64 (Apple Silicon via cargo-zigbuild)
+  - macOS x86_64 (Intel via cargo-zigbuild)
+  - Packages as tar.gz with commit hash in filename (fcm-{commit}-{platform}.tar.gz)
+  - Writes COMMIT file with current short hash
+- src/daemon.rs:
+  - Added RELEASES_DIR constant
+  - Added Release struct for tracking available binaries
+  - Added get_current_commit() to read commit hash from COMMIT file
+  - Added list_releases() to scan releases directory
+  - Updated generate_status_html() with "Download CLI" section:
+    - Platform buttons: "macOS (Apple Silicon)", "macOS (Intel)", "Linux (x86_64)"
+    - Version displayed as short commit hash (e.g., 24c7247)
+  - Added /releases/ route to serve binary files with proper Content-Type
+  - Footer now shows commit hash
+- All 103 tests pass with zero clippy warnings
+- Commit: 299b972
+
 ## Next Tasks
-- (none - multi-user auth complete)
+- (none)
