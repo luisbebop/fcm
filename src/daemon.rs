@@ -533,6 +533,8 @@ pub struct VmResponse {
     pub expose: Option<ExposeResponse>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub git_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -571,6 +573,7 @@ impl From<&VmConfig> for VmResponse {
                 domain: e.domain.clone(),
             }),
             git_url,
+            owner: config.owner.clone(),
         }
     }
 }
@@ -674,22 +677,6 @@ fn extract_bearer_token(request: &Request) -> Option<String> {
     None
 }
 
-/// Validate the Authorization header - accepts legacy daemon token or user tokens
-fn validate_auth(request: &Request, daemon_token: &str) -> bool {
-    if let Some(token) = extract_bearer_token(request) {
-        // Check legacy daemon token
-        if token == daemon_token {
-            return true;
-        }
-        // Check user token (starts with fcm_)
-        if token.starts_with("fcm_") {
-            let db = load_user_db();
-            return db.tokens.contains_key(&token);
-        }
-    }
-    false
-}
-
 /// Get user from token
 fn get_user_from_token(token: &str) -> Option<UserRecord> {
     if !token.starts_with("fcm_") {
@@ -698,6 +685,62 @@ fn get_user_from_token(token: &str) -> Option<UserRecord> {
     let db = load_user_db();
     let token_record = db.tokens.get(token)?;
     db.users.get(&token_record.user_id).cloned()
+}
+
+/// Represents the access level for a request
+#[derive(Debug, Clone)]
+enum AccessLevel {
+    /// Legacy daemon token - full access to all VMs
+    Admin,
+    /// User token - can only access their own VMs (or all if is_admin)
+    User { id: String, is_admin: bool },
+}
+
+impl AccessLevel {
+    /// Check if this access level can access a VM
+    fn can_access_vm(&self, vm: &VmConfig) -> bool {
+        match self {
+            AccessLevel::Admin => true,
+            AccessLevel::User { id, is_admin } => {
+                if *is_admin {
+                    return true;
+                }
+                // User can access VMs they own, or VMs with no owner (legacy)
+                match &vm.owner {
+                    Some(owner) => owner == id,
+                    None => true, // Allow access to legacy VMs without owner
+                }
+            }
+        }
+    }
+
+    /// Get the user ID for setting VM ownership (None for admin/legacy)
+    fn owner_id(&self) -> Option<String> {
+        match self {
+            AccessLevel::Admin => None,
+            AccessLevel::User { id, .. } => Some(id.clone()),
+        }
+    }
+}
+
+/// Determine access level from request
+fn get_access_level(request: &Request, daemon_token: &str) -> Option<AccessLevel> {
+    let token = extract_bearer_token(request)?;
+
+    // Check legacy daemon token
+    if token == daemon_token {
+        return Some(AccessLevel::Admin);
+    }
+
+    // Check user token
+    if let Some(user) = get_user_from_token(&token) {
+        return Some(AccessLevel::User {
+            id: user.id,
+            is_admin: user.is_admin,
+        });
+    }
+
+    None
 }
 
 /// Response for /auth/me endpoint
@@ -730,7 +773,7 @@ fn send_error(request: Request, status_code: u16, message: &str) -> Result<(), B
 }
 
 /// Handle POST /vms - create a new VM
-fn handle_create_vm(mut request: Request) -> Result<(), Box<dyn Error>> {
+fn handle_create_vm(mut request: Request, access_level: &AccessLevel) -> Result<(), Box<dyn Error>> {
     // Parse request body for SSH public key
     let create_request: CreateVmRequest = {
         let mut body = String::new();
@@ -749,8 +792,11 @@ fn handle_create_vm(mut request: Request) -> Result<(), Box<dyn Error>> {
         }
     }
 
+    // Get owner ID from access level
+    let owner = access_level.owner_id();
+
     // Always use random name and expose port 8000 by default
-    match vm::create_vm(None, Some(DEFAULT_EXPOSE_PORT), create_request.ssh_public_key) {
+    match vm::create_vm(None, Some(DEFAULT_EXPOSE_PORT), create_request.ssh_public_key, owner) {
         Ok(config) => {
             let response = VmResponse::from(&config);
             send_json_response(request, 201, &response)
@@ -768,17 +814,25 @@ fn handle_create_vm(mut request: Request) -> Result<(), Box<dyn Error>> {
     }
 }
 
-/// Handle GET /vms - list all VMs
-fn handle_list_vms(request: Request) -> Result<(), Box<dyn Error>> {
+/// Handle GET /vms - list all VMs (filtered by access level)
+fn handle_list_vms(request: Request, access_level: &AccessLevel) -> Result<(), Box<dyn Error>> {
     let vms = vm::list_vms()?;
-    let response: Vec<VmResponse> = vms.iter().map(VmResponse::from).collect();
+    // Filter VMs by access level
+    let filtered_vms: Vec<_> = vms
+        .into_iter()
+        .filter(|vm| access_level.can_access_vm(vm))
+        .collect();
+    let response: Vec<VmResponse> = filtered_vms.iter().map(VmResponse::from).collect();
     send_json_response(request, 200, &response)
 }
 
 /// Handle GET /vms/{id} - get VM details
-fn handle_get_vm(request: Request, vm_id: &str) -> Result<(), Box<dyn Error>> {
+fn handle_get_vm(request: Request, vm_id: &str, access_level: &AccessLevel) -> Result<(), Box<dyn Error>> {
     match vm::find_vm(vm_id) {
         Ok(config) => {
+            if !access_level.can_access_vm(&config) {
+                return send_error(request, 403, "Access denied");
+            }
             let response = VmResponse::from(&config);
             send_json_response(request, 200, &response)
         }
@@ -791,16 +845,23 @@ fn handle_stop_vm(
     request: Request,
     vm_id: &str,
     session_manager: &SessionManager,
+    access_level: &AccessLevel,
 ) -> Result<(), Box<dyn Error>> {
-    // Get the VM ID before stopping (for session cleanup)
-    let vm_config = vm::find_vm(vm_id).ok();
+    // Get the VM config for access check and session cleanup
+    let vm_config = match vm::find_vm(vm_id) {
+        Ok(config) => config,
+        Err(_) => return send_error(request, 404, &format!("VM '{}' not found", vm_id)),
+    };
+
+    // Check access
+    if !access_level.can_access_vm(&vm_config) {
+        return send_error(request, 403, "Access denied");
+    }
 
     match vm::stop_vm(vm_id) {
         Ok(config) => {
             // Clean up sessions for this VM
-            if let Some(ref vc) = vm_config {
-                session_manager.remove_vm_sessions(&vc.id);
-            }
+            session_manager.remove_vm_sessions(&vm_config.id);
             let response = VmResponse::from(&config);
             send_json_response(request, 200, &response)
         }
@@ -816,7 +877,18 @@ fn handle_stop_vm(
 }
 
 /// Handle POST /vms/{id}/start - start a stopped VM
-fn handle_start_vm(request: Request, vm_id: &str) -> Result<(), Box<dyn Error>> {
+fn handle_start_vm(request: Request, vm_id: &str, access_level: &AccessLevel) -> Result<(), Box<dyn Error>> {
+    // Get the VM config for access check
+    let vm_config = match vm::find_vm(vm_id) {
+        Ok(config) => config,
+        Err(_) => return send_error(request, 404, &format!("VM '{}' not found", vm_id)),
+    };
+
+    // Check access
+    if !access_level.can_access_vm(&vm_config) {
+        return send_error(request, 403, "Access denied");
+    }
+
     match vm::start_vm(vm_id) {
         Ok(config) => {
             let response = VmResponse::from(&config);
@@ -839,16 +911,23 @@ fn handle_destroy_vm(
     request: Request,
     vm_id: &str,
     session_manager: &SessionManager,
+    access_level: &AccessLevel,
 ) -> Result<(), Box<dyn Error>> {
-    // Get the VM ID before destroying (for session cleanup)
-    let vm_config = vm::find_vm(vm_id).ok();
+    // Get the VM config for access check and session cleanup
+    let vm_config = match vm::find_vm(vm_id) {
+        Ok(config) => config,
+        Err(_) => return send_error(request, 404, &format!("VM '{}' not found", vm_id)),
+    };
+
+    // Check access
+    if !access_level.can_access_vm(&vm_config) {
+        return send_error(request, 403, "Access denied");
+    }
 
     match vm::destroy_vm(vm_id) {
         Ok(()) => {
             // Clean up sessions for this VM
-            if let Some(ref vc) = vm_config {
-                session_manager.remove_vm_sessions(&vc.id);
-            }
+            session_manager.remove_vm_sessions(&vm_config.id);
             send_json_response(request, 200, &serde_json::json!({"deleted": true}))
         }
         Err(e) => {
@@ -866,12 +945,18 @@ fn handle_create_session(
     mut request: Request,
     vm_id: &str,
     session_manager: &SessionManager,
+    access_level: &AccessLevel,
 ) -> Result<(), Box<dyn Error>> {
     // Find VM and validate it's running
     let config = match vm::find_vm(vm_id) {
         Ok(config) => config,
         Err(_) => return send_error(request, 404, &format!("VM '{}' not found", vm_id)),
     };
+
+    // Check access
+    if !access_level.can_access_vm(&config) {
+        return send_error(request, 403, "Access denied");
+    }
 
     if config.state != VmState::Running {
         return send_error(request, 400, &format!("VM '{}' is not running", vm_id));
@@ -947,10 +1032,11 @@ fn handle_request(
     // Log request
     println!("{} {}", method, path);
 
-    // Validate auth
-    if !validate_auth(&request, token) {
-        return send_error(request, 401, "Unauthorized");
-    }
+    // Get access level (also validates auth)
+    let access_level = match get_access_level(&request, token) {
+        Some(level) => level,
+        None => return send_error(request, 401, "Unauthorized"),
+    };
 
     // Route request
     match (method, path.as_str()) {
@@ -958,24 +1044,24 @@ fn handle_request(
         (Method::Get, "/auth/me") => handle_auth_me(request),
 
         // VM collection routes
-        (Method::Post, "/vms") => handle_create_vm(request),
-        (Method::Get, "/vms") => handle_list_vms(request),
+        (Method::Post, "/vms") => handle_create_vm(request, &access_level),
+        (Method::Get, "/vms") => handle_list_vms(request, &access_level),
 
         // VM instance routes
         (Method::Get, path) if path.starts_with("/vms/") => {
             let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
             match parts.as_slice() {
-                ["vms", vm_id] => handle_get_vm(request, vm_id),
+                ["vms", vm_id] => handle_get_vm(request, vm_id, &access_level),
                 _ => send_error(request, 404, "Not found"),
             }
         }
         (Method::Post, path) if path.starts_with("/vms/") => {
             let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
             match parts.as_slice() {
-                ["vms", vm_id, "stop"] => handle_stop_vm(request, vm_id, session_manager),
-                ["vms", vm_id, "start"] => handle_start_vm(request, vm_id),
+                ["vms", vm_id, "stop"] => handle_stop_vm(request, vm_id, session_manager, &access_level),
+                ["vms", vm_id, "start"] => handle_start_vm(request, vm_id, &access_level),
                 ["vms", vm_id, "sessions"] => {
-                    handle_create_session(request, vm_id, session_manager)
+                    handle_create_session(request, vm_id, session_manager, &access_level)
                 }
                 _ => send_error(request, 404, "Not found"),
             }
@@ -983,7 +1069,7 @@ fn handle_request(
         (Method::Delete, path) if path.starts_with("/vms/") => {
             let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
             match parts.as_slice() {
-                ["vms", vm_id] => handle_destroy_vm(request, vm_id, session_manager),
+                ["vms", vm_id] => handle_destroy_vm(request, vm_id, session_manager, &access_level),
                 _ => send_error(request, 404, "Not found"),
             }
         }
@@ -1038,11 +1124,21 @@ fn handle_terminal_connection(
 
     println!("Terminal connection: vm={}, session={}", request.vm, request.session);
 
-    // Validate token
-    if request.token != token {
+    // Validate token and get access level
+    let access_level = if request.token == token {
+        AccessLevel::Admin
+    } else if request.token.starts_with("fcm_") {
+        match get_user_from_token(&request.token) {
+            Some(user) => AccessLevel::User { id: user.id, is_admin: user.is_admin },
+            None => {
+                let _ = send_terminal_error(&mut stream, "Invalid token");
+                return;
+            }
+        }
+    } else {
         let _ = send_terminal_error(&mut stream, "Invalid token");
         return;
-    }
+    };
 
     // Find VM
     let config = match vm::find_vm(&request.vm) {
@@ -1052,6 +1148,12 @@ fn handle_terminal_connection(
             return;
         }
     };
+
+    // Check access
+    if !access_level.can_access_vm(&config) {
+        let _ = send_terminal_error(&mut stream, "Access denied");
+        return;
+    }
 
     // Check VM is running
     if config.state != VmState::Running {
@@ -1618,6 +1720,7 @@ mod tests {
             mem_size_mib: 512,
             created_at: 1700000000,
             expose: None,
+            owner: Some("user456".to_string()),
         };
         let response = VmResponse::from(&config);
         assert_eq!(response.id, "test123");
@@ -1626,6 +1729,93 @@ mod tests {
         assert_eq!(response.vcpu_count, 1);
         assert_eq!(response.mem_size_mib, 512);
         assert_eq!(response.created_at, 1700000000);
+        assert_eq!(response.owner, Some("user456".to_string()));
+    }
+
+    #[test]
+    fn test_access_level_admin_can_access_all() {
+        let vm = VmConfig {
+            id: "test".to_string(),
+            name: "test-vm".to_string(),
+            ip: "172.16.0.50".to_string(),
+            state: VmState::Running,
+            vcpu_count: 1,
+            mem_size_mib: 512,
+            created_at: 0,
+            expose: None,
+            owner: Some("other-user".to_string()),
+        };
+        let admin = AccessLevel::Admin;
+        assert!(admin.can_access_vm(&vm));
+    }
+
+    #[test]
+    fn test_access_level_user_can_access_own() {
+        let vm = VmConfig {
+            id: "test".to_string(),
+            name: "test-vm".to_string(),
+            ip: "172.16.0.50".to_string(),
+            state: VmState::Running,
+            vcpu_count: 1,
+            mem_size_mib: 512,
+            created_at: 0,
+            expose: None,
+            owner: Some("user123".to_string()),
+        };
+        let user = AccessLevel::User { id: "user123".to_string(), is_admin: false };
+        assert!(user.can_access_vm(&vm));
+    }
+
+    #[test]
+    fn test_access_level_user_cannot_access_other() {
+        let vm = VmConfig {
+            id: "test".to_string(),
+            name: "test-vm".to_string(),
+            ip: "172.16.0.50".to_string(),
+            state: VmState::Running,
+            vcpu_count: 1,
+            mem_size_mib: 512,
+            created_at: 0,
+            expose: None,
+            owner: Some("other-user".to_string()),
+        };
+        let user = AccessLevel::User { id: "user123".to_string(), is_admin: false };
+        assert!(!user.can_access_vm(&vm));
+    }
+
+    #[test]
+    fn test_access_level_admin_user_can_access_all() {
+        let vm = VmConfig {
+            id: "test".to_string(),
+            name: "test-vm".to_string(),
+            ip: "172.16.0.50".to_string(),
+            state: VmState::Running,
+            vcpu_count: 1,
+            mem_size_mib: 512,
+            created_at: 0,
+            expose: None,
+            owner: Some("other-user".to_string()),
+        };
+        let admin_user = AccessLevel::User { id: "admin123".to_string(), is_admin: true };
+        assert!(admin_user.can_access_vm(&vm));
+    }
+
+    #[test]
+    fn test_access_level_user_can_access_legacy_vm() {
+        // VMs without owner (legacy) are accessible to all authenticated users
+        let vm = VmConfig {
+            id: "test".to_string(),
+            name: "test-vm".to_string(),
+            ip: "172.16.0.50".to_string(),
+            state: VmState::Running,
+            vcpu_count: 1,
+            mem_size_mib: 512,
+            created_at: 0,
+            expose: None,
+            owner: None,
+        };
+        let user = AccessLevel::User { id: "user123".to_string(), is_admin: false };
+        assert!(user.can_access_vm(&vm));
     }
 
     #[test]

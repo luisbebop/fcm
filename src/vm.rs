@@ -63,6 +63,9 @@ pub struct VmConfig {
     pub created_at: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expose: Option<ExposeConfig>,
+    /// Owner user ID (Google user ID for user tokens, None for legacy daemon token)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
 }
 
 fn default_vcpu_count() -> u8 {
@@ -75,7 +78,7 @@ fn default_mem_size_mib() -> u32 {
 
 impl VmConfig {
     /// Create a new VM config with generated ID
-    pub fn new(name: Option<String>, ip: String, expose: Option<ExposeConfig>) -> Self {
+    pub fn new(name: Option<String>, ip: String, expose: Option<ExposeConfig>, owner: Option<String>) -> Self {
         let id = generate_id();
         let name = name.unwrap_or_else(random_name);
         let created_at = std::time::SystemTime::now()
@@ -91,6 +94,7 @@ impl VmConfig {
             mem_size_mib: DEFAULT_MEM_SIZE_MIB,
             created_at,
             expose,
+            owner,
         }
     }
 
@@ -391,7 +395,7 @@ fn inject_ssh_key(rootfs_path: &Path, ssh_public_key: &str) -> Result<()> {
 /// 7. Configures firecracker via API
 /// 8. Starts the VM
 /// 9. If expose is set, configures Caddy
-pub fn create_vm(name: Option<String>, expose_port: Option<u16>, ssh_public_key: Option<String>) -> Result<VmConfig> {
+pub fn create_vm(name: Option<String>, expose_port: Option<u16>, ssh_public_key: Option<String>, owner: Option<String>) -> Result<VmConfig> {
     // Check that required files exist
     if !Path::new(KERNEL_PATH).exists() {
         return Err(VmError::ResourceNotAvailable(format!(
@@ -422,7 +426,7 @@ pub fn create_vm(name: Option<String>, expose_port: Option<u16>, ssh_public_key:
         None
     };
 
-    let config = VmConfig::new(Some(vm_name), ip.clone(), expose_config);
+    let config = VmConfig::new(Some(vm_name), ip.clone(), expose_config, owner);
 
     // Create VM directory
     fs::create_dir_all(config.dir())?;
@@ -817,17 +821,18 @@ mod tests {
 
     #[test]
     fn test_vm_config_new() {
-        let config = VmConfig::new(None, "172.16.0.50".to_string(), None);
+        let config = VmConfig::new(None, "172.16.0.50".to_string(), None, None);
         assert_eq!(config.id.len(), 8);
         assert!(config.name.contains('-'));
         assert_eq!(config.ip, "172.16.0.50");
         assert_eq!(config.state, VmState::Running);
         assert!(config.expose.is_none());
+        assert!(config.owner.is_none());
     }
 
     #[test]
     fn test_vm_config_with_name() {
-        let config = VmConfig::new(Some("myvm".to_string()), "172.16.0.50".to_string(), None);
+        let config = VmConfig::new(Some("myvm".to_string()), "172.16.0.50".to_string(), None, None);
         assert_eq!(config.name, "myvm");
     }
 
@@ -837,14 +842,20 @@ mod tests {
             port: 8000,
             domain: "myvm.64-34-93-45.sslip.io".to_string(),
         };
-        let config = VmConfig::new(Some("myvm".to_string()), "172.16.0.50".to_string(), Some(expose));
+        let config = VmConfig::new(Some("myvm".to_string()), "172.16.0.50".to_string(), Some(expose), None);
         assert!(config.expose.is_some());
         assert_eq!(config.expose.as_ref().unwrap().port, 8000);
     }
 
     #[test]
+    fn test_vm_config_with_owner() {
+        let config = VmConfig::new(Some("myvm".to_string()), "172.16.0.50".to_string(), None, Some("user123".to_string()));
+        assert_eq!(config.owner, Some("user123".to_string()));
+    }
+
+    #[test]
     fn test_vm_config_serialization() {
-        let config = VmConfig::new(Some("test".to_string()), "172.16.0.50".to_string(), None);
+        let config = VmConfig::new(Some("test".to_string()), "172.16.0.50".to_string(), None, None);
         let json = serde_json::to_string(&config).unwrap();
         let parsed: VmConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.name, "test");
@@ -853,7 +864,7 @@ mod tests {
 
     #[test]
     fn test_vm_paths() {
-        let mut config = VmConfig::new(Some("test".to_string()), "172.16.0.50".to_string(), None);
+        let mut config = VmConfig::new(Some("test".to_string()), "172.16.0.50".to_string(), None, None);
         config.id = "abc12345".to_string();
 
         assert_eq!(config.dir(), PathBuf::from("/var/lib/firecracker/abc12345"));
