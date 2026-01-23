@@ -340,29 +340,45 @@ fn build_google_auth_url(redirect_uri: &str, state: Option<&str>) -> String {
 }
 
 /// Generate the status page HTML
-fn generate_status_html(stats: &DaemonStats, user: Option<&GoogleUserInfo>) -> String {
-    // Get VM list
-    let vms = vm::list_vms().unwrap_or_default();
+fn generate_status_html(stats: &DaemonStats, user: Option<&UserRecord>) -> String {
+    // Get VM list, filtered by user ownership
+    let all_vms = vm::list_vms().unwrap_or_default();
+
+    // Filter VMs based on user access
+    let vms: Vec<_> = match &user {
+        None => vec![], // Not logged in - show no VMs
+        Some(u) if u.is_admin => all_vms, // Admin sees all VMs
+        Some(u) => all_vms.into_iter()
+            .filter(|v| v.owner.as_ref() == Some(&u.id))
+            .collect(), // Regular user sees only their VMs
+    };
+
     let running_count = vms.iter().filter(|v| v.state == VmState::Running).count();
     let stopped_count = vms.len() - running_count;
 
     // Build VM table rows
-    let vm_rows: String = if vms.is_empty() {
-        "<tr><td colspan=\"4\" style=\"text-align:center;color:#666;\">No VMs yet</td></tr>".to_string()
-    } else {
-        vms.iter()
-            .map(|v| {
-                let state_color = if v.state == VmState::Running { "#2d5" } else { "#888" };
-                let state_text = if v.state == VmState::Running { "running" } else { "stopped" };
-                let domain_html = v.expose.as_ref()
-                    .map(|e| format!("<a href=\"https://{}\" target=\"_blank\">{}</a>", e.domain, e.domain))
-                    .unwrap_or_else(|| "-".to_string());
-                format!(
-                    "<tr><td>{}</td><td style=\"color:{}\">{}</td><td>{}</td><td>{}MB</td></tr>",
-                    v.name, state_color, state_text, domain_html, v.disk_used_mb()
-                )
-            })
-            .collect()
+    let vm_rows: String = match &user {
+        None => {
+            "<tr><td colspan=\"4\" style=\"text-align:center;color:#666;\">Login to see your VMs</td></tr>".to_string()
+        }
+        Some(_) if vms.is_empty() => {
+            "<tr><td colspan=\"4\" style=\"text-align:center;color:#666;\">No VMs yet</td></tr>".to_string()
+        }
+        Some(_) => {
+            vms.iter()
+                .map(|v| {
+                    let state_color = if v.state == VmState::Running { "#2d5" } else { "#888" };
+                    let state_text = if v.state == VmState::Running { "running" } else { "stopped" };
+                    let domain_html = v.expose.as_ref()
+                        .map(|e| format!("<a href=\"https://{}\" target=\"_blank\">{}</a>", e.domain, e.domain))
+                        .unwrap_or_else(|| "-".to_string());
+                    format!(
+                        "<tr><td>{}</td><td style=\"color:{}\">{}</td><td>{}</td><td>{}MB</td></tr>",
+                        v.name, state_color, state_text, domain_html, v.disk_used_mb()
+                    )
+                })
+                .collect()
+        }
     };
 
     // Build auth section (login button or welcome message)
@@ -1389,11 +1405,17 @@ fn run_status_server(stats: Arc<DaemonStats>, sessions: SessionStore) {
                 .map(|c| parse_cookies(c))
                 .unwrap_or_default();
 
-            // Get session from cookie
+            // Get session from cookie (GoogleUserInfo)
             let session_id = cookies.get("fcm_session").cloned();
-            let user = session_id
+            let google_user = session_id
                 .as_ref()
                 .and_then(|sid| sessions.lock().ok()?.get(sid).cloned());
+
+            // Look up UserRecord from database to get is_admin status
+            let user_record = google_user.as_ref().and_then(|gu| {
+                let db = load_user_db();
+                db.users.get(&gu.id).cloned()
+            });
 
             // Route request
             let base_url = format!("https://fcm.{}.sslip.io", stats.server_ip.replace('.', "-"));
@@ -1566,7 +1588,7 @@ fn run_status_server(stats: Arc<DaemonStats>, sessions: SessionStore) {
             }
 
             // Generate and send status page
-            let html = generate_status_html(&stats, user.as_ref());
+            let html = generate_status_html(&stats, user_record.as_ref());
             send_html_response(&mut stream, 200, &html, None);
         });
     }
