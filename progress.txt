@@ -1025,5 +1025,30 @@
 - All 97 tests pass with zero warnings
 - Commit: fe760bd
 
+### Task 63: Public Status Page at fcm.[ip].sslip.io
+- Added barebones HTML status page (Warren Buffet style) for public viewing
+- Page explains what fcm is in one paragraph
+- Shows how to deploy with git push workflow
+- Live daemon status section:
+  - Uptime (formatted as Xd Xh Xm)
+  - VM counts (running vs stopped)
+- VM table showing:
+  - Name
+  - State (colored green for running, gray for stopped)
+  - Domain
+  - Disk usage (MB)
+- Status page server runs on internal port 7780
+- Caddy proxies fcm.[publicip].sslip.io to localhost:7780 with auto-SSL
+- Page dynamically generates VM list on each request
+- Simple serif font (Georgia), clean layout, minimal styling
+- src/daemon.rs:
+  - Added DaemonStats struct to track start_time and server_ip
+  - Added generate_status_html() to render the page
+  - Added run_status_server() TCP server for serving HTML
+  - Updated run() to start status server and configure Caddy domain
+- Publicly accessible at https://fcm.64-34-93-45.sslip.io
+- All 97 tests pass with zero warnings
+- Commit: 03eaca3
+
 ## Next Tasks
 - None - all PRD features implemented
