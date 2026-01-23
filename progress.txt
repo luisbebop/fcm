@@ -1099,5 +1099,82 @@
 - All 97 tests pass with zero warnings
 - Commit: 7f73ff3
 
+### Task 67: CLI Login, Logout, Whoami Commands
+- Implemented multi-user authentication CLI commands as specified in PRD
+- main.rs:
+  - Added Login, Logout, Whoami command variants
+  - Added match arms to call client functions
+- client.rs:
+  - Added login() function:
+    - Starts local TCP server on port 9876
+    - Opens browser to /cli-login endpoint on status page
+    - Parses OAuth callback with token, name, email params
+    - Saves user token (fcm_...) to ~/.fcm-token
+    - Shows "Logged in as [name] ([email])" on success
+  - Added logout() function: removes ~/.fcm-token file
+  - Added whoami() function:
+    - Shows "Using legacy daemon token (admin access)" for non-fcm_ tokens
+    - Calls GET /auth/me to get user info for fcm_ tokens
+  - Added AuthMeResponse struct for /auth/me deserialization
+  - Added status_page_url() to build status page URL from FCM_HOST
+  - Added open_browser() cross-platform helper (macOS/Linux/Windows)
+  - Added parse_query_params() for URL query string parsing
+- daemon.rs:
+  - Added UserDatabase, UserRecord, TokenRecord structs for users.json storage
+  - Added users_db_path(), load_user_db(), save_user_db() for database I/O
+  - Added generate_user_token() to create fcm_... tokens
+  - Added create_or_update_user() to create user record and token
+  - Added /cli-login endpoint to status page server:
+    - Accepts port parameter from CLI
+    - Redirects to Google OAuth with state=cli:{port}
+  - Updated OAuth callback to handle CLI login:
+    - Detects CLI login via state parameter
+    - Creates user token and redirects to http://127.0.0.1:{port}/callback
+    - Passes token, name, email in query params
+  - Added extract_bearer_token() helper
+  - Updated validate_auth() to accept both legacy daemon token and user tokens
+  - Added get_user_from_token() to look up user from token
+  - Added AuthMeResponse struct for API response
+  - Added handle_auth_me() handler for GET /auth/me endpoint
+  - Added /auth/me route to API routing
+  - Updated build_google_auth_url() to accept optional state parameter
+  - First user to login becomes admin (is_admin: true)
+- All 97 tests pass with zero clippy warnings
+- Commit: 356d06a
+
+### Task 68: VM Ownership and Per-User Access Control
+- Implemented per-user VM ownership as specified in PRD
+- src/vm.rs:
+  - Added owner field to VmConfig struct (optional, for backward compatibility)
+  - Updated VmConfig::new() to accept owner parameter
+  - Updated create_vm() to accept owner parameter
+  - VMs created with legacy daemon token have no owner (None)
+  - VMs created with user tokens have owner set to user's Google ID
+- src/daemon.rs:
+  - Added AccessLevel enum with Admin and User variants
+  - AccessLevel::Admin: full access to all VMs (legacy daemon token)
+  - AccessLevel::User: access only to owned VMs (or all if is_admin flag set)
+  - Added can_access_vm() method to check VM access based on ownership
+  - Added owner_id() method to get user ID for VM creation
+  - Added get_access_level() to determine request authorization
+  - Updated handle_create_vm() to pass owner to vm::create_vm()
+  - Updated handle_list_vms() to filter VMs by access level
+  - Updated handle_get_vm() to check ownership before returning VM
+  - Updated handle_stop_vm() to check ownership before stopping
+  - Updated handle_start_vm() to check ownership before starting
+  - Updated handle_destroy_vm() to check ownership before destroying
+  - Updated handle_create_session() to check ownership before creating console session
+  - Updated handle_terminal_connection() to validate user tokens and check VM access
+  - Added VmResponse.owner field for API responses
+  - Removed unused validate_auth() function (replaced by get_access_level)
+- Access control rules:
+  1. Legacy daemon token (/var/lib/firecracker/.token): full access to all VMs
+  2. User token (fcm_...): access only to VMs with matching owner field
+  3. Admin users (is_admin: true): can see/manage all VMs
+  4. Legacy VMs (no owner): accessible to all authenticated users
+- Added 6 unit tests for AccessLevel access control logic
+- All 103 tests pass with zero clippy warnings
+- Commit: 2148e58
+
 ## Next Tasks
-- None - all PRD features implemented
+- (none - multi-user auth complete)

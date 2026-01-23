@@ -655,14 +655,31 @@ pub fn login() -> Result<(), Box<dyn Error>> {
                         // Send success response to browser
                         let success_html = r#"<!DOCTYPE html>
 <html>
-<head><title>Login Successful</title></head>
-<body style="font-family: Georgia, serif; max-width: 500px; margin: 100px auto; text-align: center;">
-<h1>✓ Login Successful</h1>
-<p>You can close this tab and return to the terminal.</p>
+<head>
+<meta charset="UTF-8">
+<title>Login Successful</title>
+</head>
+<body style="font-family: monospace; max-width: 500px; margin: 80px auto; text-align: center; background: #1a1a1a; color: #fff;">
+<pre style="color: #888; line-height: 1.2; font-size: 14px;">
+        ░░▒▒▓▓<span style="color:#fff">██</span>▓▓▒▒░░
+     ░▒▓<span style="color:#fff">██▀▀      ▀▀██</span>▓▒░
+   ░▓<span style="color:#fff">█▀                ▀█</span>▓░
+  ▒<span style="color:#fff">█▀                    ▀█</span>▒
+ ▒<span style="color:#fff">█▌                      ▐█</span>▒
+ ▓<span style="color:#fff">█                        █</span>▓
+ ▓<span style="color:#fff">█                        █</span>▓
+ ▒<span style="color:#fff">█▌                      ▐█</span>▒
+  ▒<span style="color:#fff">█▄                    ▄█</span>▒
+   ░▓<span style="color:#fff">█▄                ▄█</span>▓░
+     ░▒▓<span style="color:#fff">██▄▄      ▄▄██</span>▓▒░
+        ░░▒▒▓▓<span style="color:#fff">██</span>▓▓▒▒░░
+</pre>
+<h1 style="color: #4a9eff; margin-top: 20px;">Login Successful</h1>
+<p style="color: #888;">You can close this tab and return to the terminal.</p>
 </body>
 </html>"#;
                         let response = format!(
-                            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=UTF-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                             success_html.len(),
                             success_html
                         );
@@ -676,14 +693,31 @@ pub fn login() -> Result<(), Box<dyn Error>> {
                         // Send error response to browser
                         let error_html = format!(r#"<!DOCTYPE html>
 <html>
-<head><title>Login Failed</title></head>
-<body style="font-family: Georgia, serif; max-width: 500px; margin: 100px auto; text-align: center;">
-<h1>✗ Login Failed</h1>
-<p>{}</p>
+<head>
+<meta charset="UTF-8">
+<title>Login Failed</title>
+</head>
+<body style="font-family: monospace; max-width: 500px; margin: 80px auto; text-align: center; background: #1a1a1a; color: #fff;">
+<pre style="color: #888; line-height: 1.2; font-size: 14px;">
+        ░░▒▒▓▓<span style="color:#fff">██</span>▓▓▒▒░░
+     ░▒▓<span style="color:#fff">██▀▀      ▀▀██</span>▓▒░
+   ░▓<span style="color:#fff">█▀                ▀█</span>▓░
+  ▒<span style="color:#fff">█▀                    ▀█</span>▒
+ ▒<span style="color:#fff">█▌                      ▐█</span>▒
+ ▓<span style="color:#fff">█                        █</span>▓
+ ▓<span style="color:#fff">█                        █</span>▓
+ ▒<span style="color:#fff">█▌                      ▐█</span>▒
+  ▒<span style="color:#fff">█▄                    ▄█</span>▒
+   ░▓<span style="color:#fff">█▄                ▄█</span>▓░
+     ░▒▓<span style="color:#fff">██▄▄      ▄▄██</span>▓▒░
+        ░░▒▒▓▓<span style="color:#fff">██</span>▓▓▒▒░░
+</pre>
+<h1 style="color: #ff4a4a; margin-top: 20px;">Login Failed</h1>
+<p style="color: #888;">{}</p>
 </body>
 </html>"#, error);
                         let response = format!(
-                            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=UTF-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                             error_html.len(),
                             error_html
                         );

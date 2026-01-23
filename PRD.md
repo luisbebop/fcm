@@ -294,3 +294,80 @@ build: `docker build + docker export + dd + mkfs.ext4 + tar extract`
 7. `fcm attach cosmic-nova <session-id>` - reattach, verify state preserved
 8. `curl https://cosmic-nova.64-34-93-45.sslip.io` - verify ssl works
 9. `fcm destroy cosmic-nova` - cleanup
+
+## multi-user authentication
+
+per-user tokens so each user can only see/manage their own VMs.
+
+### login flow
+
+```
+1. user runs: fcm login
+2. cli starts local server on 127.0.0.1:9876
+3. cli opens browser to: https://fcm.{ip}.sslip.io/cli-login?port=9876
+4. status page redirects to google oauth
+5. after oauth success, status page generates token
+6. status page redirects to: http://127.0.0.1:9876/callback?token=fcm_abc123...
+7. local cli server receives token, saves to ~/.fcm-token
+8. cli shows "Logged in as user@example.com" and exits
+9. browser shows "Login successful! You can close this tab."
+```
+
+### commands
+
+```
+fcm login                     # authenticate with google (automatic token save)
+fcm logout                    # remove token from ~/.fcm-token
+fcm whoami                    # show current user info
+```
+
+### vm ownership
+
+- each vm has an `owner` field (user id of creator)
+- users can only see/manage their own vms
+- legacy daemon token (`/var/lib/firecracker/.token`) has full access
+- first user to login becomes admin (can see all vms)
+
+### user database
+
+stored in `/var/lib/firecracker/users.json`:
+
+```json
+{
+  "users": {
+    "google_user_id": {
+      "id": "google_user_id",
+      "email": "user@example.com",
+      "name": "User Name",
+      "created_at": 1700000000,
+      "is_admin": false
+    }
+  },
+  "tokens": {
+    "fcm_abc123...": {
+      "user_id": "google_user_id",
+      "created_at": 1700000000
+    }
+  }
+}
+```
+
+### api endpoints
+
+```
+GET /auth/me                  # get current user info (validates token)
+GET /cli-login?port=9876      # initiate cli login flow (redirects to oauth)
+```
+
+### access control
+
+1. **legacy daemon token** (`/var/lib/firecracker/.token`): full access to all VMs
+2. **user token** (`fcm_...`): access only to VMs with matching `owner` field
+3. **admin users**: can see/manage all VMs
+
+### files
+
+```
+/var/lib/firecracker/users.json   # user database and tokens
+~/.fcm-token                       # client token (fcm_... format)
+```
