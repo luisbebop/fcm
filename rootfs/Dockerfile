@@ -5,7 +5,7 @@ RUN apk add --no-cache \
     tmux curl bash iproute2 rng-tools \
     nodejs npm git \
     build-base libffi-dev yaml-dev zlib-dev openssl-dev \
-    tzdata sqlite-dev postgresql-dev
+    tzdata sqlite-dev libpq-dev
 
 # Configure dropbear SSH and set root password
 RUN mkdir -p /etc/dropbear && \
