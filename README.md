@@ -211,10 +211,12 @@ sudo fcm daemon
 sudo nohup fcm daemon > /var/log/fcm.log 2>&1 &
 ```
 
-### 11. Set Up Client (on your local machine)
+### 11. Set Up Admin Client (optional)
+
+> **Note:** This step is only needed for admin access. Regular users should use `fcm login` with Google OAuth instead.
 
 ```bash
-# Copy the token from the server
+# Copy the admin token from the server
 scp root@yourserver:/var/lib/firecracker/.token ~/.fcm-token
 
 # Set the server address
