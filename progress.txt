@@ -1176,5 +1176,17 @@
 - All 103 tests pass with zero clippy warnings
 - Commit: 2148e58
 
+### Task 69: Fix Login Callback Page Encoding and Add ASCII Art
+- Fixed garbled characters on login successful/failed callback pages
+- Root cause: missing UTF-8 charset declaration in HTML
+- Added `<meta charset="UTF-8">` to both pages
+- Added ASCII art ring logo (same as terminal create output) to both pages
+- Applied dark theme styling (#1a1a1a background, white/gray text)
+- Success page: blue title color (#4a9eff)
+- Error page: red title color (#ff4a4a)
+- Consistent branding with terminal output
+- All 103 tests pass with zero warnings
+- Commit: 97b78fe
+
 ## Next Tasks
 - (none - multi-user auth complete)

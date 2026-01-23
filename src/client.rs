@@ -653,31 +653,18 @@ pub fn login() -> Result<(), Box<dyn Error>> {
                         let email = params.get("email").cloned().unwrap_or_else(|| "unknown".to_string());
 
                         // Send success response to browser
-                        let success_html = r#"<!DOCTYPE html>
+                        let success_html = format!(r#"<!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
 <title>Login Successful</title>
 </head>
-<body style="font-family: monospace; max-width: 500px; margin: 80px auto; text-align: center; background: #1a1a1a; color: #fff;">
-<pre style="color: #888; line-height: 1.2; font-size: 14px;">
-        ░░▒▒▓▓<span style="color:#fff">██</span>▓▓▒▒░░
-     ░▒▓<span style="color:#fff">██▀▀      ▀▀██</span>▓▒░
-   ░▓<span style="color:#fff">█▀                ▀█</span>▓░
-  ▒<span style="color:#fff">█▀                    ▀█</span>▒
- ▒<span style="color:#fff">█▌                      ▐█</span>▒
- ▓<span style="color:#fff">█                        █</span>▓
- ▓<span style="color:#fff">█                        █</span>▓
- ▒<span style="color:#fff">█▌                      ▐█</span>▒
-  ▒<span style="color:#fff">█▄                    ▄█</span>▒
-   ░▓<span style="color:#fff">█▄                ▄█</span>▓░
-     ░▒▓<span style="color:#fff">██▄▄      ▄▄██</span>▓▒░
-        ░░▒▒▓▓<span style="color:#fff">██</span>▓▓▒▒░░
-</pre>
-<h1 style="color: #4a9eff; margin-top: 20px;">Login Successful</h1>
-<p style="color: #888;">You can close this tab and return to the terminal.</p>
+<body style="font-family: -apple-system, sans-serif; max-width: 400px; margin: 60px auto; text-align: center;">
+<img src="{}/calopsita.jpg" alt="calopsita" style="width: 200px; border-radius: 50%;">
+<h1 style="margin-top: 20px;">Login Successful</h1>
+<p style="color: #666;">You can close this tab and return to the terminal.</p>
 </body>
-</html>"#;
+</html>"#, status_page_url());
                         let response = format!(
                             "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=UTF-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                             success_html.len(),
@@ -697,25 +684,12 @@ pub fn login() -> Result<(), Box<dyn Error>> {
 <meta charset="UTF-8">
 <title>Login Failed</title>
 </head>
-<body style="font-family: monospace; max-width: 500px; margin: 80px auto; text-align: center; background: #1a1a1a; color: #fff;">
-<pre style="color: #888; line-height: 1.2; font-size: 14px;">
-        ░░▒▒▓▓<span style="color:#fff">██</span>▓▓▒▒░░
-     ░▒▓<span style="color:#fff">██▀▀      ▀▀██</span>▓▒░
-   ░▓<span style="color:#fff">█▀                ▀█</span>▓░
-  ▒<span style="color:#fff">█▀                    ▀█</span>▒
- ▒<span style="color:#fff">█▌                      ▐█</span>▒
- ▓<span style="color:#fff">█                        █</span>▓
- ▓<span style="color:#fff">█                        █</span>▓
- ▒<span style="color:#fff">█▌                      ▐█</span>▒
-  ▒<span style="color:#fff">█▄                    ▄█</span>▒
-   ░▓<span style="color:#fff">█▄                ▄█</span>▓░
-     ░▒▓<span style="color:#fff">██▄▄      ▄▄██</span>▓▒░
-        ░░▒▒▓▓<span style="color:#fff">██</span>▓▓▒▒░░
-</pre>
-<h1 style="color: #ff4a4a; margin-top: 20px;">Login Failed</h1>
-<p style="color: #888;">{}</p>
+<body style="font-family: -apple-system, sans-serif; max-width: 400px; margin: 60px auto; text-align: center;">
+<img src="{}/calopsita.jpg" alt="calopsita" style="width: 200px; border-radius: 50%;">
+<h1 style="color: #c00; margin-top: 20px;">Login Failed</h1>
+<p style="color: #666;">{}</p>
 </body>
-</html>"#, error);
+</html>"#, status_page_url(), error);
                         let response = format!(
                             "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=UTF-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                             error_html.len(),

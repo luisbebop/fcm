@@ -1548,6 +1548,21 @@ fn run_status_server(stats: Arc<DaemonStats>, sessions: SessionStore) {
                     send_redirect(&mut stream, &base_url, Some(cookie));
                     return;
                 }
+
+                // Serve calopsita image
+                if path == "/calopsita.jpg" {
+                    let image_path = format!("{}/calopsita.jpg", BASE_DIR);
+                    if let Ok(image_data) = std::fs::read(&image_path) {
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: image/jpeg\r\nContent-Length: {}\r\nCache-Control: public, max-age=86400\r\nConnection: close\r\n\r\n",
+                            image_data.len()
+                        );
+                        let _ = stream.write_all(response.as_bytes());
+                        let _ = stream.write_all(&image_data);
+                        let _ = stream.flush();
+                        return;
+                    }
+                }
             }
 
             // Generate and send status page
