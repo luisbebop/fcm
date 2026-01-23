@@ -1294,5 +1294,22 @@
 - All 103 tests pass with zero clippy warnings
 - Commit: cb2928c
 
+### Task 76: Add Bun Runtime Support
+- Added Bun 1.3.6 JavaScript runtime to base VM image
+- rootfs/Dockerfile:
+  - Added unzip package (required for Bun installer)
+  - Added Bun installation via official install script
+  - Bun binary installed to /usr/local/bin/bun
+  - Created bunx symlink for package runner
+- rootfs/fcm-deploy:
+  - Added PATH export to ensure /usr/local/bin is searched
+  - Detect Bun projects by presence of bun.lockb file
+  - Use `bun install --production` for Bun projects
+  - Fall back to npm for projects without bun.lockb
+- Rebuilt base-rootfs.img with Bun (640MB sparse)
+- Bun apps can now be deployed with `bun start` in Procfile
+- All 103 tests pass with zero warnings
+- Commit: 20b9363
+
 ## Next Tasks
 (none - project complete per PRD)
