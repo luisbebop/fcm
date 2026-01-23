@@ -1222,5 +1222,33 @@
 - All 103 tests pass with zero clippy warnings
 - Commit: 299b972
 
+### Task 72: Add Quick Start Section to fcm Without Args Output
+- Added Quick Start deployment example to `fcm` command when run without args in a directory with .fcm file
+- Shows same git workflow as `fcm create` output:
+  - git init
+  - echo '<h1>koan</h1>' > index.html
+  - echo 'web: python3 -m http.server $PORT' > Procfile
+  - git remote add origin <git-url>
+  - git add -A && git commit -m 'init' && git push origin main
+- Uses random_koan() for the index.html content
+- Provides immediate guidance for users who return to a project
+- All 103 tests pass with zero warnings
+- Commit: a32fb48
+
+### Task 73: Move Google OAuth Credentials to .env File
+- Removed hardcoded Google OAuth credentials from source code
+- src/daemon.rs:
+  - Removed GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET constants
+  - Added load_oauth_credentials() function to read from env vars or .env file
+  - Updated exchange_code_for_token() to use loaded credentials
+  - Updated build_google_auth_url() to use loaded credentials
+- Created .env.example showing required variables
+- Created .env file with actual credentials (gitignored)
+- Added .env to .gitignore
+- Rewrote git history using filter-branch to remove credentials from all past commits
+- Cleaned up stale refs and ran garbage collection
+- All 103 tests pass with zero warnings
+- Commit: (pending)
+
 ## Next Tasks
 - (none)
