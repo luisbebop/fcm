@@ -284,7 +284,23 @@ Each VM gets:
 - 1024 MB RAM
 - 2 GB disk (sparse)
 - 512 MB swap
-- Python 3, Ruby, Node.js pre-installed
+
+### Base Image Breakdown
+
+| Component | Size | Version |
+|-----------|------|---------|
+| **Runtimes** | | |
+| Ruby | 34 MB | 3.4 |
+| Python | 55 MB | 3.12 |
+| Node.js | 64 MB | 24.x |
+| **Build Tools** | | |
+| GCC | 21 MB | |
+| Headers | 30 MB | |
+| Libexec | 130 MB | |
+| **Other** | | |
+| Shared libs | 15 MB | |
+| Swap file | 512 MB | |
+| **Total** | ~1 GB | |
 
 ## Environment Variables
 
