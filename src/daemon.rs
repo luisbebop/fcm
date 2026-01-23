@@ -486,7 +486,7 @@ $ git push origin main</pre>
     </table>
 
     <p style="margin-top:40px;font-size:0.85em;color:#666;">
-        <a href="https://github.com/anthropics/claude-code">Source</a>
+        <a href="https://github.com/luisbebop/fcm">Source</a>
     </p>
 </body>
 </html>"##,
