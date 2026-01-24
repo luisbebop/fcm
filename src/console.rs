@@ -452,12 +452,15 @@ pub fn connect(vm: &str) -> Result<(), ConsoleError> {
         url.push_str(&format!("&env=LANG={}", url_encode(&l)));
     }
 
-    // Build HTTP request with Authorization header
-    let request = tungstenite::http::Request::builder()
-        .uri(&url)
-        .header("Authorization", format!("Bearer {}", token))
-        .body(())
+    // Build WebSocket request with Authorization header
+    // Use IntoClientRequest to get proper WebSocket headers, then add our custom header
+    use tungstenite::client::IntoClientRequest;
+    let mut request = url
+        .into_client_request()
         .map_err(|e| ConsoleError::ConnectionFailed(format!("Failed to build request: {}", e)))?;
+    request
+        .headers_mut()
+        .insert("Authorization", format!("Bearer {}", token).parse().unwrap());
 
     // Connect to WebSocket server (with TLS for wss://)
     let (websocket, response) = tungstenite::connect(request)
