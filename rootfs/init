@@ -28,12 +28,17 @@ mkdir -p /var/log
 log ">>> init: devices ready"
 
 # Network is pre-configured by kernel boot args
+ip link set lo up 2>/dev/null || true
 ip link set eth0 up 2>/dev/null || true
 log ">>> init: network up"
 
 # Set up DNS
 echo "nameserver 8.8.8.8" > /etc/resolv.conf
 echo "nameserver 8.8.4.4" >> /etc/resolv.conf
+
+# Set up localhost in /etc/hosts (needed for apps binding to localhost)
+echo "127.0.0.1   localhost localhost.localdomain" > /etc/hosts
+echo "::1         localhost localhost.localdomain" >> /etc/hosts
 
 # Create necessary directories
 mkdir -p /run/sshd
