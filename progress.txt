@@ -2100,3 +2100,11 @@
   - Returns 404 for non-existent VMs, 503 for stopped VMs
 - All 98 tests pass with zero clippy warnings
 - Commit: b156b2f
+
+### Task 116b: Fix Web Console Session Creation
+- Fixed issue where web console showed "connecting, disconnecting" in loop
+- Root cause: `session=web` was treated as reconnect request, but session didn't exist yet
+- Fix: When session ID is provided but doesn't exist, create new session with that ID
+- Previously: Code returned "Session web not found" and connection closed
+- Now: Creates session with specified ID (e.g., "web") on first connect
+- Commit: 02e447b
