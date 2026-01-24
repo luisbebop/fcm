@@ -1995,5 +1995,16 @@
   - macOS (Intel) (fcm-macos-x64.tar.gz)
 - Commit: a17c886
 
+### Task 112: Split Daemon Scripts
+- Separated restart-daemon.sh into focused scripts
+- New scripts:
+  - **build-releases.sh**: Compile all platforms (Linux, macOS ARM64, macOS x64), create tar.gz archives, update COMMIT file
+  - **restart-daemon-dev.sh**: For debugging - rebuild binary, clear logs, restart daemon
+  - **restart-daemon.sh**: For production - just restart daemon (no rebuild, logs preserved)
+- Removed old scripts:
+  - build-macos.sh (superseded)
+  - build-release.sh (superseded)
+- Commit: c283928
+
 ## Next Tasks
 - None currently - all PRD features complete
