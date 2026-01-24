@@ -1597,6 +1597,7 @@ fn handle_terminal_connection(
         // Start SSH stdout reader thread that broadcasts to subscribers
         let output_subs_for_reader = Arc::clone(&output_subscribers);
         let mut stdout_reader = stdout;
+        let session_id_for_reader = session_id.clone();
         thread::spawn(move || {
             use std::io::Read;
             let mut buf = [0u8; 4096];
@@ -1627,6 +1628,9 @@ fn handle_terminal_connection(
                     Err(_) => break,
                 }
             }
+            // SSH exited - clean up session from global store
+            eprintln!("SSH exited for session {}, cleaning up", session_id_for_reader);
+            CONSOLE_SESSIONS.lock().unwrap().remove(&session_id_for_reader);
         });
 
         // Store session
