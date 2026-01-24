@@ -1155,13 +1155,19 @@ fn handle_request(
     }
 }
 
+/// Escape a string for use in shell variable assignment
+/// Uses single quotes and escapes embedded single quotes
+fn shell_escape(s: &str) -> String {
+    // Wrap in single quotes, escape any existing single quotes
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
 /// WebSocket console request parsed from HTTP upgrade
 struct WsConsoleRequest {
     vm: String,
     token: String,
     cols: u16,
     rows: u16,
-    #[allow(dead_code)]
     env: HashMap<String, String>,
 }
 
@@ -1331,6 +1337,22 @@ fn handle_terminal_connection(
 
     // Set initial terminal size
     set_pty_window_size(master_fd, request.cols, request.rows);
+
+    // Set environment variables in VM shell (write export commands to PTY)
+    // This happens before the proxy starts, so the shell receives these on connect
+    for (key, value) in &request.env {
+        // Only export safe variable names (alphanumeric and underscore)
+        if key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !key.is_empty() {
+            let export_cmd = format!("export {}={}\n", key, shell_escape(value));
+            unsafe {
+                libc::write(
+                    master_fd,
+                    export_cmd.as_ptr() as *const libc::c_void,
+                    export_cmd.len(),
+                );
+            }
+        }
+    }
 
     // Proxy WebSocket messages to/from PTY
     proxy_websocket_pty(websocket, master_fd, &config.name);
@@ -2064,6 +2086,20 @@ mod tests {
         assert_eq!(envs.len(), 2);
         assert_eq!(envs[0], ("TERM".to_string(), "xterm".to_string()));
         assert_eq!(envs[1], ("SHELL".to_string(), "/bin/zsh".to_string()));
+    }
+
+    #[test]
+    fn test_shell_escape() {
+        // Simple string
+        assert_eq!(shell_escape("hello"), "'hello'");
+        // String with spaces
+        assert_eq!(shell_escape("hello world"), "'hello world'");
+        // String with special chars
+        assert_eq!(shell_escape("test$var"), "'test$var'");
+        // String with single quotes
+        assert_eq!(shell_escape("it's"), "'it'\\''s'");
+        // Path
+        assert_eq!(shell_escape("/bin/zsh"), "'/bin/zsh'");
     }
 
     #[test]
