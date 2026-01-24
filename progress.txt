@@ -1504,5 +1504,22 @@
 - All 108 tests pass with zero clippy warnings
 - Commit: 7db96e8
 
+### Task 86: Make Exit Disconnect from Console (SSH Behavior)
+- Changed `exit` to disconnect from console instead of respawning shell
+- Previous behavior: shell respawned immediately, connection stayed open
+- New behavior: shell exits, connection closes (like SSH)
+- Shell respawns automatically on next `fcm console` connection
+- fcm-agent/src/main.rs:
+  - On shell exit: mark shell as not initialized, close connection
+  - Shell will spawn fresh on next client connection
+- src/daemon.rs:
+  - When receiving `{"exit":N}`, close connection instead of showing message
+- src/console.rs:
+  - Removed "(Ctrl+] to detach)" hint - exit is the natural way out
+  - Ctrl+] still works as escape hatch if needed
+- Ctrl+C works normally (sends SIGINT to current shell command)
+- All 108 tests pass with zero clippy warnings
+- Commit: 86eed53
+
 ## Next Tasks
 - Core PRD implementation complete

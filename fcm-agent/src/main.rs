@@ -140,7 +140,9 @@ fn send_message(stream: &mut TcpStream, msg: &str) {
     let _ = stream.flush();
 }
 
-fn ensure_shell_running() -> (RawFd, libc::pid_t) {
+/// Returns (master_fd, child_pid, is_reconnect)
+/// is_reconnect is true if we're attaching to an existing shell
+fn ensure_shell_running() -> (RawFd, libc::pid_t, bool) {
     // Check if we need to spawn or respawn shell
     let master_fd = MASTER_FD.load(Ordering::SeqCst);
     let child_pid = CHILD_PID.load(Ordering::SeqCst);
@@ -151,8 +153,8 @@ fn ensure_shell_running() -> (RawFd, libc::pid_t) {
         let mut status: i32 = 0;
         let result = unsafe { libc::waitpid(child_pid, &mut status, libc::WNOHANG) };
         if result == 0 {
-            // Child still running
-            return (master_fd, child_pid);
+            // Child still running - this is a reconnect
+            return (master_fd, child_pid, true);
         }
         // Child exited, need to respawn
         eprintln!("Shell (pid {}) exited, will respawn on check", child_pid);
@@ -166,7 +168,7 @@ fn ensure_shell_running() -> (RawFd, libc::pid_t) {
     SHELL_INITIALIZED.store(true, Ordering::SeqCst);
     eprintln!("Spawned shell (pid {})", new_pid);
 
-    (new_fd, new_pid)
+    (new_fd, new_pid, false)
 }
 
 fn handle_connection(mut stream: TcpStream) {
@@ -176,11 +178,18 @@ fn handle_connection(mut stream: TcpStream) {
     eprintln!("Client connected from {:?}", stream.peer_addr());
 
     // Get or create shell (persists across connections)
-    let (master_fd, child_pid) = ensure_shell_running();
+    let (master_fd, child_pid, is_reconnect) = ensure_shell_running();
 
-    // Send SIGWINCH to shell to make it redraw prompt on reconnect
-    // This helps when reconnecting to an existing session
-    unsafe { libc::kill(child_pid, libc::SIGWINCH) };
+    if is_reconnect {
+        eprintln!("Reconnecting to existing shell (pid {})", child_pid);
+        // Send SIGWINCH to trigger prompt redraw
+        unsafe { libc::kill(child_pid, libc::SIGWINCH) };
+        // Send a newline to the shell to trigger a fresh prompt
+        // This ensures the user sees the prompt even if SIGWINCH isn't enough
+        unsafe {
+            libc::write(master_fd, b"\n".as_ptr() as *const libc::c_void, 1);
+        }
+    }
 
     // Set socket to non-blocking for polling
     stream.set_nonblocking(true).ok();
