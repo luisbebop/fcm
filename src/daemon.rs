@@ -1335,19 +1335,10 @@ fn proxy_agent_io(client_stream: TcpStream, agent_stream: TcpStream) {
                         if client_write.flush().is_err() {
                             break;
                         }
-                    } else if let Some(exit_code) = extract_exit_code(trimmed) {
-                        // Shell exited, fcm-agent will respawn it automatically
-                        // Notify user with a friendly message
-                        let msg = format!(
-                            "\r\n\x1b[90m[Shell exited (code {}), new shell spawned]\x1b[0m\r\n",
-                            exit_code
-                        );
-                        if client_write.write_all(msg.as_bytes()).is_err() {
-                            break;
-                        }
-                        if client_write.flush().is_err() {
-                            break;
-                        }
+                    } else if extract_exit_code(trimmed).is_some() {
+                        // Shell exited - close connection (like SSH behavior)
+                        // Shell will respawn on next `fcm console` connection
+                        break;
                     }
                 }
                 Err(_) => break,

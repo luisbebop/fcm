@@ -1493,6 +1493,16 @@
 - All 108 tests pass with zero clippy warnings
 - Commit: 5e05c3c
 
+### Task 85: Fix Missing Shell Prompt on Console Reconnect
+- Fixed issue where reconnecting to a console showed no shell prompt
+- Problem: Shell already printed prompt before disconnect, doesn't re-print on reconnect
+- Solution: Send SIGWINCH signal to shell when client reconnects
+- SIGWINCH causes most shells to redraw/refresh their prompt
+- fcm-agent/src/main.rs:
+  - Added `libc::kill(child_pid, libc::SIGWINCH)` after `ensure_shell_running()`
+- Rebuilt base-rootfs.img with updated fcm-agent binary
+- All 108 tests pass with zero clippy warnings
+- Commit: 7db96e8
+
 ## Next Tasks
 - Core PRD implementation complete
-- All existing VMs destroyed (clean slate for new fcm-agent-based VMs)

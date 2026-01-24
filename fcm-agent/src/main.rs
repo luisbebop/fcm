@@ -176,7 +176,7 @@ fn handle_connection(mut stream: TcpStream) {
     eprintln!("Client connected from {:?}", stream.peer_addr());
 
     // Get or create shell (persists across connections)
-    let (mut master_fd, mut child_pid) = ensure_shell_running();
+    let (master_fd, child_pid) = ensure_shell_running();
 
     // Send SIGWINCH to shell to make it redraw prompt on reconnect
     // This helps when reconnecting to an existing session
@@ -195,14 +195,16 @@ fn handle_connection(mut stream: TcpStream) {
             eprintln!("Shell exited with code {}", exit_code);
             send_message(&mut stream, &format!("{{\"exit\":{}}}", exit_code));
 
-            // Respawn shell (as per PRD: "if shell exits, new shell spawns automatically")
+            // Close the master fd and mark shell as not initialized
+            // Shell will respawn on next client connection (not immediately)
             unsafe { libc::close(master_fd) };
-            let (new_master, new_pid) = spawn_shell();
-            master_fd = new_master;
-            child_pid = new_pid;
-            MASTER_FD.store(master_fd, Ordering::SeqCst);
-            CHILD_PID.store(child_pid, Ordering::SeqCst);
-            eprintln!("Respawned shell (pid {})", child_pid);
+            MASTER_FD.store(-1, Ordering::SeqCst);
+            CHILD_PID.store(-1, Ordering::SeqCst);
+            SHELL_INITIALIZED.store(false, Ordering::SeqCst);
+            eprintln!("Shell exited, will respawn on next connection");
+
+            // End this connection - client will disconnect
+            break;
         }
 
         // Read from PTY and send to client

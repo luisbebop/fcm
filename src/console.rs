@@ -290,7 +290,6 @@ pub fn connect(vm: &str) -> Result<(), ConsoleError> {
 
     // Simple connected message
     println!(" connected\r");
-    println!("(Ctrl+] to detach)\r");
     println!("\r");
 
     // Check if we're in a TTY
@@ -414,7 +413,7 @@ pub fn connect(vm: &str) -> Result<(), ConsoleError> {
     let _ = reader_handle.join();
 
     // Terminal will be restored when _raw_terminal is dropped
-    println!("\r\nDetached from {}. Run 'fcm console {}' to reconnect.\r", vm, vm);
+    println!("\r");
 
     Ok(())
 }
