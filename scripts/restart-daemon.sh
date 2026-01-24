@@ -43,6 +43,13 @@ tar -czf "$TEMP_DIR/fcm-macos-x64.tar.gz" -C "$TEMP_DIR" fcm
 sudo mv "$TEMP_DIR/fcm-macos-x64.tar.gz" "$RELEASES_DIR/"
 rm "$TEMP_DIR/fcm"
 
+# Linux x64
+cp target/release/fcm "$TEMP_DIR/fcm"
+chmod +x "$TEMP_DIR/fcm"
+tar -czf "$TEMP_DIR/fcm-linux-x64.tar.gz" -C "$TEMP_DIR" fcm
+sudo mv "$TEMP_DIR/fcm-linux-x64.tar.gz" "$RELEASES_DIR/"
+rm "$TEMP_DIR/fcm"
+
 rmdir "$TEMP_DIR"
 
 echo "==> Installing daemon binary..."

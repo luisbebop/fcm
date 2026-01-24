@@ -532,8 +532,9 @@ fn generate_status_html(stats: &DaemonStats, user: Option<&UserRecord>) -> Strin
                 let platform_name = match r.platform.as_str() {
                     "macos-arm64" => "macOS (Apple Silicon)",
                     "macos-x64" => "macOS (Intel)",
+                    "linux-x64" => "Linux",
                     "darwin-arm64" => "macOS",  // legacy
-                    "linux-x86_64" => "Linux",
+                    "linux-x86_64" => "Linux",  // legacy
                     "linux-aarch64" => "Linux (ARM64)",
                     _ => &r.platform,
                 };
