@@ -1784,5 +1784,24 @@
 - All 90 tests pass with zero clippy warnings
 - Commit: 84ead22
 
+### Task 100: Environment Variable Passthrough to Shell
+- Completed PRD Task 99 feature: passing client environment variables to VM shell
+- Environment variables (TERM, SHELL, COLORTERM, LANG) are parsed from WebSocket URL query params
+- Added shell_escape() function to safely quote values for shell assignment
+- Export commands written to PTY on console connect before proxy starts
+- Security: only allow safe variable names (alphanumeric and underscore)
+- src/daemon.rs:
+  - Added shell_escape() function (single-quote escaping)
+  - Added env var export loop in handle_terminal_connection()
+  - Removed #[allow(dead_code)] from env field in WsConsoleRequest
+  - Added test_shell_escape() unit test
+- Flow:
+  1. Client builds WebSocket URL with env params (e.g., env=TERM=xterm-256color)
+  2. Server parses env vars from query string
+  3. On connection, server writes `export VAR='value'` commands to PTY
+  4. Shell in VM receives environment variables
+- All 91 tests pass with zero clippy warnings
+- Commit: fa3df84
+
 ## Next Tasks
-- None currently - WebSocket console protocol implementation complete
+- None currently - Environment variable passthrough complete
