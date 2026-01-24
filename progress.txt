@@ -1545,5 +1545,20 @@
 - All 108 tests pass with zero warnings
 - Commit: 31a8cf0
 
+### Task 89: Add Claude Code to Base VM Image
+- Added Claude Code CLI to base VM image (v2.1.19)
+- rootfs/Dockerfile:
+  - Install via official installer: `curl -fsSL https://claude.ai/install.sh | bash`
+  - Copy binary to /usr/local/bin/claude (206MB)
+  - Add /usr/local/bin to PATH in /etc/profile
+- README.md:
+  - Added Claude Code to Base Image Breakdown table (206 MB, latest)
+- src/daemon.rs:
+  - Added Claude Code tag to status page (orange #D97706)
+- Rebuilt base-rootfs.img (848MB sparse with Claude Code)
+- Tested in VM: `claude --version` returns "2.1.19 (Claude Code)"
+- All 108 tests pass with zero warnings
+- Commit: 0d8aed7
+
 ## Next Tasks
 - Core PRD implementation complete
