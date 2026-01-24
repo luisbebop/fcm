@@ -19,8 +19,10 @@ RUN curl -fsSL https://claude.ai/install.sh | bash && \
     cp -L /root/.local/bin/claude /usr/local/bin/claude && \
     rm -rf /root/.local /root/.claude
 
-# Add /usr/local/bin to PATH for all users
-RUN echo 'export PATH="/usr/local/bin:$PATH"' >> /etc/profile
+# Add /usr/local/bin to PATH for all users (both bash and zsh)
+RUN echo 'export PATH="/usr/local/bin:$PATH"' >> /etc/profile && \
+    mkdir -p /etc/zsh && \
+    echo 'emulate sh -c "source /etc/profile"' > /etc/zsh/zprofile
 
 # Configure dropbear SSH and set root password
 RUN mkdir -p /etc/dropbear && \
