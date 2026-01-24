@@ -1,15 +1,22 @@
 // fcm-agent: PTY manager for Firecracker VMs
 // Listens on TCP :7779, spawns PTY with /bin/sh, proxies I/O via JSON framed messages
+// PTY session persists across client disconnects (shell kept alive until VM stops)
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::os::unix::io::RawFd;
 use std::process;
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicBool, Ordering};
+use std::sync::Mutex;
 use std::thread;
 
+// Global shell state - persists across client connections
 static MASTER_FD: AtomicI32 = AtomicI32::new(-1);
 static CHILD_PID: AtomicI32 = AtomicI32::new(-1);
+static SHELL_INITIALIZED: AtomicBool = AtomicBool::new(false);
+
+// Mutex to ensure only one client can connect at a time
+static CONNECTION_LOCK: Mutex<()> = Mutex::new(());
 
 fn base64_encode(data: &[u8]) -> String {
     const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -133,13 +140,43 @@ fn send_message(stream: &mut TcpStream, msg: &str) {
     let _ = stream.flush();
 }
 
+fn ensure_shell_running() -> (RawFd, libc::pid_t) {
+    // Check if we need to spawn or respawn shell
+    let master_fd = MASTER_FD.load(Ordering::SeqCst);
+    let child_pid = CHILD_PID.load(Ordering::SeqCst);
+
+    // Check if shell was initialized and is still running
+    if SHELL_INITIALIZED.load(Ordering::SeqCst) && child_pid > 0 {
+        // Check if child is still alive (non-blocking wait)
+        let mut status: i32 = 0;
+        let result = unsafe { libc::waitpid(child_pid, &mut status, libc::WNOHANG) };
+        if result == 0 {
+            // Child still running
+            return (master_fd, child_pid);
+        }
+        // Child exited, need to respawn
+        eprintln!("Shell (pid {}) exited, will respawn on check", child_pid);
+        unsafe { libc::close(master_fd) };
+    }
+
+    // Spawn new shell
+    let (new_fd, new_pid) = spawn_shell();
+    MASTER_FD.store(new_fd, Ordering::SeqCst);
+    CHILD_PID.store(new_pid, Ordering::SeqCst);
+    SHELL_INITIALIZED.store(true, Ordering::SeqCst);
+    eprintln!("Spawned shell (pid {})", new_pid);
+
+    (new_fd, new_pid)
+}
+
 fn handle_connection(mut stream: TcpStream) {
+    // Only allow one client at a time - others wait
+    let _lock = CONNECTION_LOCK.lock().unwrap();
+
     eprintln!("Client connected from {:?}", stream.peer_addr());
 
-    // Spawn initial shell
-    let (mut master_fd, mut child_pid) = spawn_shell();
-    MASTER_FD.store(master_fd, Ordering::SeqCst);
-    CHILD_PID.store(child_pid, Ordering::SeqCst);
+    // Get or create shell (persists across connections)
+    let (mut master_fd, mut child_pid) = ensure_shell_running();
 
     // Set socket to non-blocking for polling
     stream.set_nonblocking(true).ok();
@@ -149,12 +186,12 @@ fn handle_connection(mut stream: TcpStream) {
     let mut pty_buf = [0u8; 4096];
 
     loop {
-        // Check if child exited
+        // Check if child exited (user typed 'exit')
         if let Some(exit_code) = check_child_exit(child_pid) {
             eprintln!("Shell exited with code {}", exit_code);
             send_message(&mut stream, &format!("{{\"exit\":{}}}", exit_code));
 
-            // Respawn shell
+            // Respawn shell (as per PRD: "if shell exits, new shell spawns automatically")
             unsafe { libc::close(master_fd) };
             let (new_master, new_pid) = spawn_shell();
             master_fd = new_master;
@@ -178,7 +215,8 @@ fn handle_connection(mut stream: TcpStream) {
         line_buf.clear();
         match reader.read_line(&mut line_buf) {
             Ok(0) => {
-                eprintln!("Client disconnected");
+                // Client disconnected - BUT keep shell running!
+                eprintln!("Client disconnected (shell preserved for reconnect)");
                 break;
             }
             Ok(_) => {
@@ -210,12 +248,9 @@ fn handle_connection(mut stream: TcpStream) {
         }
     }
 
-    // Cleanup
-    unsafe {
-        libc::kill(child_pid, libc::SIGTERM);
-        libc::close(master_fd);
-    }
-    eprintln!("Connection handler exited");
+    // DO NOT kill shell on disconnect - it persists for next client
+    // Shell is only killed when VM stops or user types 'exit'
+    eprintln!("Connection handler exited (shell still running)");
 }
 
 fn extract_json_string(json: &str, key: &str) -> Option<String> {
