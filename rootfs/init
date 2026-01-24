@@ -69,6 +69,17 @@ ss -tlnp 2>&1 >> $LOG || netstat -tlnp 2>&1 >> $LOG
 
 log ">>> init: ssh launched (step 2)"
 
+# Start fcm-agent for console sessions (PTY manager)
+log ">>> init: starting fcm-agent"
+/usr/local/bin/fcm-agent >> $LOG 2>&1 &
+AGENT_PID=$!
+sleep 1
+if kill -0 $AGENT_PID 2>/dev/null; then
+    log ">>> init: fcm-agent running (pid $AGENT_PID)"
+else
+    log ">>> init: fcm-agent DIED"
+fi
+
 # Create /app directory for Procfile deployments
 mkdir -p /app
 

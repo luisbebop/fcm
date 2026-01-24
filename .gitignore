@@ -1,3 +1,4 @@
 /target
+/fcm-agent/target
 Cargo.lock
 .env
