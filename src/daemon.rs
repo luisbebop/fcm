@@ -110,39 +110,57 @@ fn list_releases() -> Vec<Release> {
         Err(_) => return releases,
     };
 
+    // Get current commit from COMMIT file
+    let current_commit = get_current_commit()
+        .map(|(c, _)| c)
+        .unwrap_or_else(|| "unknown".to_string());
+
     for entry in entries.flatten() {
         let filename = entry.file_name().to_string_lossy().to_string();
 
-        // Expected format: fcm-<commit>-<platform>.tar.gz
-        // e.g., fcm-abc1234-linux-x86_64.tar.gz, fcm-abc1234-darwin-arm64.tar.gz
-        if !filename.starts_with("fcm-") || !filename.ends_with(".tar.gz") {
+        // Skip non-fcm files and metadata files
+        if !filename.starts_with("fcm-") || filename == "COMMIT" {
             continue;
         }
 
-        // Parse the filename
-        let name_without_ext = filename.trim_end_matches(".tar.gz");
-        let parts: Vec<&str> = name_without_ext.split('-').collect();
+        // Get file size
+        let size_mb = entry.metadata()
+            .map(|m| m.len() as f64 / 1_048_576.0)
+            .unwrap_or(0.0);
 
-        // Format: fcm-<commit>-<os>-<arch>
-        if parts.len() >= 4 {
-            let commit = parts[1].to_string();
-            let platform = format!("{}-{}", parts[2], parts[3]);
-
-            // Get file size
-            let size_mb = entry.metadata()
-                .map(|m| m.len() as f64 / 1_048_576.0)
-                .unwrap_or(0.0);
-
+        // New format: fcm-macos-arm64, fcm-macos-x64 (no extension, no commit in name)
+        if !filename.contains('.') {
+            let platform = filename.trim_start_matches("fcm-").to_string();
             releases.push(Release {
-                commit,
+                commit: current_commit.clone(),
                 platform,
                 filename,
                 size_mb,
             });
+            continue;
+        }
+
+        // Legacy format: fcm-<commit>-<platform>.tar.gz
+        if filename.ends_with(".tar.gz") {
+            let name_without_ext = filename.trim_end_matches(".tar.gz");
+            let parts: Vec<&str> = name_without_ext.split('-').collect();
+
+            // Format: fcm-<commit>-<os>-<arch>
+            if parts.len() >= 4 {
+                let commit = parts[1].to_string();
+                let platform = format!("{}-{}", parts[2], parts[3]);
+
+                releases.push(Release {
+                    commit,
+                    platform,
+                    filename,
+                    size_mb,
+                });
+            }
         }
     }
 
-    // Sort by platform (darwin first, then linux)
+    // Sort by platform (macos first, then linux)
     releases.sort_by(|a, b| a.platform.cmp(&b.platform));
 
     releases
@@ -513,7 +531,9 @@ fn generate_status_html(stats: &DaemonStats, user: Option<&UserRecord>) -> Strin
             .iter()
             .map(|r| {
                 let platform_name = match r.platform.as_str() {
-                    "darwin-arm64" => "macOS",
+                    "macos-arm64" => "macOS (Apple Silicon)",
+                    "macos-x64" => "macOS (Intel)",
+                    "darwin-arm64" => "macOS",  // legacy
                     "linux-x86_64" => "Linux",
                     "linux-aarch64" => "Linux (ARM64)",
                     _ => &r.platform,

@@ -21,6 +21,12 @@ echo "==> Building macOS binaries..."
 cargo zigbuild --release --target aarch64-apple-darwin 2>&1 | grep -E "Compiling|Finished|error" | tail -3
 cargo zigbuild --release --target x86_64-apple-darwin 2>&1 | grep -E "Compiling|Finished|error" | tail -3
 
+echo "==> Cleaning old releases..."
+sudo rm -f /var/lib/firecracker/releases/fcm-*.tar.gz
+sudo rm -f /var/lib/firecracker/releases/fcm-macos
+sudo rm -f /var/lib/firecracker/releases/fcm-macos-arm64
+sudo rm -f /var/lib/firecracker/releases/fcm-macos-x64
+
 echo "==> Installing binaries..."
 sudo cp target/release/fcm /usr/local/bin/fcm
 sudo cp target/aarch64-apple-darwin/release/fcm /var/lib/firecracker/releases/fcm-macos-arm64
