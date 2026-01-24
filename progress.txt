@@ -1923,19 +1923,17 @@
 
 ### Task 107: Fix PATH Not Set for zsh Login Shells in VM
 - Fixed issue where `bun` and `claude` commands weren't found in VM console
-- Root cause: PATH was set in `/etc/profile`, but zsh doesn't source this file
-- zsh uses its own configuration files (`/etc/zsh/zprofile` for login shells)
-- rootfs/Dockerfile changes:
-  - Create `/etc/zsh` directory
-  - Create `/etc/zsh/zprofile` that sources `/etc/profile`
-  - Uses `emulate sh -c "source /etc/profile"` for proper POSIX compatibility
+- Root cause: Console SSH runs `exec zsh` without `--login` flag
+- Without `--login`, zsh doesn't source `/etc/zsh/zprofile` which sets PATH
+- Multiple fixes applied:
+  1. rootfs/Dockerfile: Create `/etc/zsh/zprofile` that sources `/etc/profile`
+  2. rootfs/init: Pass PATH in setsid command for ttyS0 shell
+  3. **daemon.rs**: Change `exec zsh` to `exec zsh --login` for console SSH (key fix)
+  4. scripts/restart-daemon.sh: Set RUSTUP_HOME/CARGO_HOME for sudo builds
 - Rebuilt base-rootfs.img (855MB sparse)
-- Verified fix works:
-  - `zsh -lc 'which bun'` → `/usr/local/bin/bun`
-  - `zsh -lc 'which claude'` → `/usr/local/bin/claude`
-- Existing VMs need to be destroyed and recreated to get the new rootfs
+- Rebuilt macOS client binaries
 - All 98 tests pass with zero clippy warnings
-- Commit: 0090dd2
+- Commits: 0090dd2, 8effb8b, c52df24, c1491e6
 
 ## Next Tasks
 - None currently - all PRD features complete
