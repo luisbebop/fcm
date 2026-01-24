@@ -1611,5 +1611,50 @@
 - All 108 tests pass with zero warnings
 - Commit: 9dac2ff
 
+### Task 94: Serial Console via PTY (No fcm-agent)
+- Implemented the PRD's "console redesign" to use Firecracker's serial console
+- Replaces fcm-agent inside VM with direct PTY connection to Firecracker
+- src/vm.rs:
+  - spawn_firecracker() now creates PTY using libc::openpty()
+  - Firecracker's stdin/stdout connected to PTY slave
+  - Returns (Child, master_fd) instead of just Child
+  - create_vm() and start_vm() now return (VmConfig, RawFd)
+  - Added RawFd import from std::os::unix::io
+- src/daemon.rs:
+  - Added ConsoleFds type (Arc<Mutex<HashMap<String, RawFd>>>)
+  - Store PTY master FDs when VMs are created/started
+  - Close FDs when VMs are stopped/destroyed
+  - Replaced run_terminal_server() to use ConsoleFds instead of SessionManager
+  - Replaced handle_terminal_connection() for direct PTY proxy
+  - Added set_pty_window_size() for TIOCSWINSZ ioctl
+  - Added proxy_pty_io() for raw byte I/O to PTY master
+  - Added parse_resize_message() for terminal resize handling
+  - Removed fcm-agent JSON protocol (connect_to_agent, proxy_agent_io)
+- src/session.rs:
+  - Removed all fcm-agent protocol code (~270 lines)
+  - Kept SessionManager for session tracking (cleanup on stop/destroy)
+  - Removed: AGENT_PORT, connect_to_agent, send_resize, base64 encode/decode
+  - Removed: extract_stdout/stdin/exit_code, make_stdin/resize_message
+  - Removed: AgentConnection struct and related tests
+- rootfs/init:
+  - Replaced fcm-agent startup with agetty on ttyS0
+  - agetty --autologin root --noclear ttyS0 115200 vt100
+  - Serial console provides login shell without password prompt
+- rootfs/Dockerfile:
+  - Added agetty package (from util-linux)
+  - Removed fcm-agent binary copy
+- Benefits of serial console approach:
+  - No agent process inside VM (fewer dependencies)
+  - Raw bytes instead of JSON+base64 (lower latency, less overhead)
+  - Standard Linux serial console (console=ttyS0 already configured)
+  - ~370 fewer lines of code
+  - Works even if VM network is broken
+- Limitations:
+  - PTY FDs lost on daemon restart (VMs keep running but console unavailable)
+  - Need to stop/start VM to regain console after daemon restart
+- All 99 tests pass with zero clippy warnings
+- Commit: 7b0cba5
+
 ## Next Tasks
-- Core PRD implementation complete
+- Rebuild base-rootfs.img with agetty (fcm-agent removed)
+- Test serial console with new VM
