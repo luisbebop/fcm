@@ -1311,5 +1311,16 @@
 - All 103 tests pass with zero warnings
 - Commit: 20b9363
 
+### Task 77: Status Page Runtime Tags and Release Cleanup
+- Added runtime version tags to status page with brand colors:
+  - Ruby 3.4 (red #cc342d)
+  - Python 3.12 (blue #3776ab)
+  - Node.js 24 (green #339933)
+  - Bun 1.3 (beige #fbf0df)
+- Cleaned up releases directory to only show latest version
+- Updated README.md with Bun in auto-detection table and base image breakdown
+- All 103 tests pass with zero warnings
+- Commits: feaea00, e909917
+
 ## Next Tasks
 (none - project complete per PRD)
