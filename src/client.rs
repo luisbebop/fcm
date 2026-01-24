@@ -799,8 +799,8 @@ pub fn list_sessions(vm_filter: Option<&str>) -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
-    println!("{:<8} {:<20} {:<15} {:<20}", "ID", "VM", "IP", "CREATED");
-    println!("{}", "-".repeat(65));
+    println!("{:<14} {:<20} {:<15} {:<20}", "ID", "VM", "IP", "CREATED");
+    println!("{}", "-".repeat(71));
 
     for session in sessions {
         let id = session["id"].as_str().unwrap_or("-");
@@ -828,11 +828,11 @@ pub fn list_sessions(vm_filter: Option<&str>) -> Result<(), Box<dyn Error>> {
             "-".to_string()
         };
 
-        println!("{:<8} {:<20} {:<15} {:<20}", id, vm_name, vm_ip, created_str);
+        println!("{:<14} {:<20} {:<15} {:<20}", id, vm_name, vm_ip, created_str);
     }
 
     println!();
-    println!("Reconnect with: fcm console <vm> --session <id>");
+    println!("Reconnect with: fcm console <vm> -s <id>");
 
     Ok(())
 }
