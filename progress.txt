@@ -1466,6 +1466,32 @@
 - All 110 tests pass with zero clippy warnings
 - Commit: 1faffcd
 
+### Task 84: Simplify Terminal Protocol to Match PRD Spec
+- Removed session field from terminal connect protocol (matches PRD specification)
+- PRD specifies: {"vm":"..","token":"..","cols":N,"rows":N} without session field
+- Since there's "one session per VM", the daemon auto-creates/reuses sessions internally
+- src/daemon.rs:
+  - Removed session field from TerminalConnectRequest struct
+  - Removed SessionResponse and CreateSessionRequest structs
+  - Removed handle_create_session handler function
+  - Removed POST /vms/{id}/sessions endpoint from routing
+  - Removed 2 related tests (test_session_response_from_info, test_create_session_request_default)
+  - Removed unused SessionError and SessionInfo imports
+- src/console.rs:
+  - Removed session field from ConnectRequest struct
+  - Updated connect() function signature: now only takes vm name (no session ID)
+  - Updated test_connect_request_serialization test
+- src/client.rs:
+  - Simplified console_vm() to call console::connect() directly (no HTTP API call)
+  - Removed SessionResponse struct (no longer needed)
+- src/session.rs:
+  - Added #[allow(dead_code)] to create_session() (legacy method, now unused)
+- Tested full console flow:
+  - fcm console photon-tensor connects successfully with simplified protocol
+  - Daemon logs "Terminal connection: vm=photon-tensor" (no session field)
+  - Persistent shell (PID 535) maintained by fcm-agent across reconnects
+- All 108 tests pass with zero clippy warnings
+- Commit: 5e05c3c
+
 ## Next Tasks
-- Test full console reconnect flow (verify state preservation with variables/files)
 - Update existing VMs with new fcm-agent (requires rootfs rebuild or manual copy)
