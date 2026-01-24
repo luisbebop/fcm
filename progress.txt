@@ -1741,5 +1741,48 @@
 - All 91 tests pass with zero clippy warnings
 - Commit: e9ae7a6
 
+### Task 99: WebSocket Console Protocol (Sprite-style)
+- Migrated console from raw TCP to WebSocket over TLS
+- Added WebSocket dependencies to Cargo.toml:
+  - tungstenite = { version = "0.24", features = ["native-tls"] } for WebSocket
+  - url = "2" for URL parsing
+  - native-tls = "0.2" for TLS support
+- src/daemon.rs:
+  - Changed TERMINAL_BIND_ADDR from "0.0.0.0:7778" to "127.0.0.1:7778"
+  - Terminal server now localhost-only (Caddy proxies external connections)
+  - Added WsConsoleRequest struct for WebSocket query params (vm, cols, rows, env)
+  - Added parse_ws_query_params() to parse URL query string
+  - Rewrote handle_terminal_connection() for WebSocket:
+    - Uses tungstenite::accept_hdr() with custom callback
+    - Auth via Bearer token in Authorization header during WebSocket upgrade
+    - Connection params (vm name, terminal size) from URL query string
+  - Added proxy_websocket_pty() for WebSocket <-> PTY I/O:
+    - Binary frames for terminal I/O (raw bytes)
+    - Text frames for control messages (resize)
+  - Updated run() to use add_fcm_domain() instead of add_site()
+  - Removed old TCP-based code (TerminalConnectRequest, proxy_pty_io, etc.)
+- src/console.rs:
+  - Added url_encode() for URL query parameter encoding
+  - Changed get_websocket_url_base() to build wss:// URLs
+  - Rewrote connect() for WebSocket client:
+    - Builds WebSocket URL with query params (vm, cols, rows)
+    - Connects with Authorization header
+    - Binary frames for terminal I/O
+    - Text frames for resize messages
+  - Updated make_resize_message() to JSON format: {"type":"resize","cols":N,"rows":N}
+- src/caddy.rs:
+  - Added generate_fcm_domain_block() for WebSocket console proxy config
+  - Added add_fcm_domain() and add_fcm_domain_to_file()
+  - Caddy config has /console route proxying to localhost:7778
+- Protocol specification:
+  - Auth: Bearer token in WebSocket upgrade Authorization header
+  - Connection: wss://fcm.{ip}.sslip.io/console?vm={name}&cols={N}&rows={N}
+  - Data frames: Binary for terminal I/O, Text for control (resize)
+  - Resize message format: {"type":"resize","cols":N,"rows":N}
+  - TLS provided by Caddy (wss:// externally, ws:// to localhost)
+- WebSocket server responds with 101 Switching Protocols for valid connections
+- All 90 tests pass with zero clippy warnings
+- Commit: 84ead22
+
 ## Next Tasks
-- None currently - zsh console shell implementation complete
+- None currently - WebSocket console protocol implementation complete
