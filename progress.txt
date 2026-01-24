@@ -2117,3 +2117,26 @@
 - Now each VM has its own web session (e.g., "web-atomic-comet", "web-nebula-vertex")
 - Multiple VMs can have active web console sessions simultaneously
 - Commit: 0b6f726
+
+### Task 117: Improve README Documentation
+- Comprehensive rewrite of README.md with all new features
+- **New sections added:**
+  - Console Sessions: Persistent sessions, reconnection, session listing
+  - Web Console: Browser-based terminal with xterm.js
+  - Admin Token: Alternative to OAuth for server operators
+  - Google OAuth Configuration: Step-by-step setup with Google Cloud Console
+  - Systemd Service: Production deployment configuration
+  - Client Configuration: How to set up the CLI on local machines
+  - Architecture diagram: Updated with ports and Caddy routing
+  - Ports table: 7777, 7778, 7780, 443, 80
+  - Files and Directories: Server and client file locations
+  - Environment Variables: Split into server-side and client-side
+  - Troubleshooting: Connection, auth, VM, console, SSL, git push, network issues
+  - Logs: Where to find daemon, Caddy, and VM logs
+  - Updating: How to update binary, base image, and client
+- **Updated sections:**
+  - Commands: Added `fcm console ls` and `-s` flag for session reconnect
+  - Authentication: Split into OAuth and Admin Token sections
+  - Quick Start: Fixed console command to include VM name
+- All 98 tests pass with zero clippy warnings
+- Commit: 95ee46d
