@@ -126,6 +126,7 @@ impl SessionManager {
     }
 
     /// Create a new session on a VM (legacy API - redirects to get_or_create_console)
+    #[allow(dead_code)]
     pub fn create_session(
         &self,
         vm_id: &str,

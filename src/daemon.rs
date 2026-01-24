@@ -2,7 +2,7 @@
 
 use crate::caddy;
 use crate::network;
-use crate::session::{connect_to_agent, send_resize, base64_decode, extract_stdout, extract_exit_code, make_stdin_message, SessionError, SessionInfo, SessionManager};
+use crate::session::{connect_to_agent, send_resize, base64_decode, extract_stdout, extract_exit_code, make_stdin_message, SessionManager};
 use crate::vm::{self, VmConfig, VmError, VmState, BASE_DIR};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -658,16 +658,15 @@ fn html_escape(s: &str) -> String {
         .replace('\'', "&#x27;")
 }
 
-/// Terminal connect request from client
+/// Terminal connect request from client (per PRD spec)
 #[derive(Debug, Deserialize)]
 struct TerminalConnectRequest {
     vm: String,
-    session: String,
     token: String,
-    /// Terminal width (optional for backwards compat)
+    /// Terminal width
     #[serde(default = "default_cols")]
     cols: u16,
-    /// Terminal height (optional for backwards compat)
+    /// Terminal height
     #[serde(default = "default_rows")]
     rows: u16,
 }
@@ -742,36 +741,6 @@ impl From<&VmConfig> for VmResponse {
             owner: config.owner.clone(),
         }
     }
-}
-
-/// Session response (for API responses)
-#[derive(Debug, Serialize)]
-pub struct SessionResponse {
-    pub id: String,
-    pub vm_id: String,
-    pub session_name: String,
-    pub created_at: u64,
-    pub is_default: bool,
-}
-
-impl From<&SessionInfo> for SessionResponse {
-    fn from(info: &SessionInfo) -> Self {
-        SessionResponse {
-            id: info.id.clone(),
-            vm_id: info.vm_id.clone(),
-            session_name: info.session_name.clone(),
-            created_at: info.created_at,
-            is_default: info.is_default,
-        }
-    }
-}
-
-/// Request to create a session
-#[derive(Debug, Deserialize, Default)]
-struct CreateSessionRequest {
-    /// If true, create or return the default session
-    #[serde(default)]
-    is_default: bool,
 }
 
 /// Error response
@@ -1106,56 +1075,6 @@ fn handle_destroy_vm(
     }
 }
 
-/// Handle POST /vms/{id}/sessions - create a new session
-fn handle_create_session(
-    mut request: Request,
-    vm_id: &str,
-    session_manager: &SessionManager,
-    access_level: &AccessLevel,
-) -> Result<(), Box<dyn Error>> {
-    // Find VM and validate it's running
-    let config = match vm::find_vm(vm_id) {
-        Ok(config) => config,
-        Err(_) => return send_error(request, 404, &format!("VM '{}' not found", vm_id)),
-    };
-
-    // Check access
-    if !access_level.can_access_vm(&config) {
-        return send_error(request, 403, "Access denied");
-    }
-
-    if config.state != VmState::Running {
-        return send_error(request, 400, &format!("VM '{}' is not running", vm_id));
-    }
-
-    // Parse request body for is_default flag
-    let create_request: CreateSessionRequest = {
-        let mut body = String::new();
-        request.as_reader().read_to_string(&mut body)?;
-        if body.is_empty() {
-            CreateSessionRequest::default()
-        } else {
-            serde_json::from_str(&body).unwrap_or_default()
-        }
-    };
-
-    // Create session
-    match session_manager.create_session(&config.id, &config.ip, create_request.is_default) {
-        Ok(session) => {
-            let response = SessionResponse::from(&session);
-            send_json_response(request, 201, &response)
-        }
-        Err(e) => {
-            let status = match &e {
-                SessionError::VmNotAvailable(_) => 503,
-                SessionError::ConnectionFailed(_) => 502,
-                _ => 500,
-            };
-            send_error(request, status, &e.to_string())
-        }
-    }
-}
-
 /// Handle GET /auth/me - get current user info
 fn handle_auth_me(request: Request) -> Result<(), Box<dyn Error>> {
     let token = match extract_bearer_token(&request) {
@@ -1225,9 +1144,6 @@ fn handle_request(
             match parts.as_slice() {
                 ["vms", vm_id, "stop"] => handle_stop_vm(request, vm_id, session_manager, &access_level),
                 ["vms", vm_id, "start"] => handle_start_vm(request, vm_id, &access_level),
-                ["vms", vm_id, "sessions"] => {
-                    handle_create_session(request, vm_id, session_manager, &access_level)
-                }
                 _ => send_error(request, 404, "Not found"),
             }
         }
@@ -1287,7 +1203,7 @@ fn handle_terminal_connection(
         }
     };
 
-    println!("Terminal connection: vm={}, session={}", request.vm, request.session);
+    println!("Terminal connection: vm={}", request.vm);
 
     // Validate token and get access level
     let access_level = if request.token == token {
@@ -1918,32 +1834,6 @@ mod tests {
     }
 
     #[test]
-    fn test_session_response_from_info() {
-        let info = SessionInfo {
-            id: "abc123".to_string(),
-            vm_id: "vm456".to_string(),
-            session_name: "console-vm456".to_string(),
-            created_at: 1700000000,
-            is_default: true,
-        };
-        let response = SessionResponse::from(&info);
-        assert_eq!(response.id, "abc123");
-        assert_eq!(response.vm_id, "vm456");
-        assert_eq!(response.session_name, "console-vm456");
-        assert_eq!(response.created_at, 1700000000);
-        assert!(response.is_default);
-    }
-
-    #[test]
-    fn test_create_session_request_default() {
-        let request: CreateSessionRequest = serde_json::from_str("{}").unwrap();
-        assert!(!request.is_default);
-
-        let request: CreateSessionRequest = serde_json::from_str(r#"{"is_default": true}"#).unwrap();
-        assert!(request.is_default);
-    }
-
-    #[test]
     fn test_vm_response_from_config() {
         let config = VmConfig {
             id: "test123".to_string(),
@@ -2059,11 +1949,12 @@ mod tests {
 
     #[test]
     fn test_terminal_connect_request_deserialization() {
-        let json = r#"{"vm": "test-vm", "session": "abc123", "token": "secret"}"#;
+        let json = r#"{"vm": "test-vm", "token": "secret"}"#;
         let request: TerminalConnectRequest = serde_json::from_str(json).unwrap();
         assert_eq!(request.vm, "test-vm");
-        assert_eq!(request.session, "abc123");
         assert_eq!(request.token, "secret");
+        assert_eq!(request.cols, 80);  // default
+        assert_eq!(request.rows, 24);  // default
     }
 
     #[test]

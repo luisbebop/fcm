@@ -205,20 +205,6 @@ struct ErrorResponse {
     error: String,
 }
 
-/// Session info response
-#[derive(Debug, Deserialize)]
-struct SessionResponse {
-    id: String,
-    #[allow(dead_code)]
-    vm_id: String,
-    #[allow(dead_code)]
-    session_name: String,
-    #[allow(dead_code)]
-    created_at: u64,
-    #[allow(dead_code)]
-    is_default: bool,
-}
-
 /// Get the client token file path (~/.fcm-token)
 fn token_path() -> PathBuf {
     dirs::home_dir()
@@ -765,15 +751,9 @@ pub fn whoami() -> Result<(), Box<dyn Error>> {
 
 /// Open a persistent console session on a VM
 pub fn console_vm(vm: &str) -> Result<(), Box<dyn Error>> {
-    // Get or create the console session via the HTTP API
-    let body = r#"{"is_default": true}"#;
-    let response = make_request("POST", &format!("/vms/{}/sessions", vm), Some(body.to_string()))?;
-    let session: SessionResponse = response.into_json()?;
-
-    // Connect to the session via the terminal streaming protocol
-    // Session ID is hidden from user - they just see the VM name
-    console::connect(vm, &session.id).map_err(|e| e.to_string())?;
-
+    // Connect directly via the terminal streaming protocol
+    // Daemon will auto-create/reuse the session internally
+    console::connect(vm).map_err(|e| e.to_string())?;
     Ok(())
 }
 

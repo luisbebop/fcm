@@ -81,11 +81,10 @@ impl From<io::Error> for ConsoleError {
     }
 }
 
-/// Request to connect to a console session
+/// Request to connect to a console session (per PRD spec)
 #[derive(Debug, Serialize)]
 struct ConnectRequest {
     vm: String,
-    session: String,
     token: String,
     /// Terminal width in columns
     cols: u16,
@@ -232,7 +231,7 @@ fn get_terminal_size() -> (u16, u16) {
 /// 3. Enters raw terminal mode
 /// 4. Proxies stdin/stdout to the TCP connection
 /// 5. Restores terminal on exit
-pub fn connect(vm: &str, session: &str) -> Result<(), ConsoleError> {
+pub fn connect(vm: &str) -> Result<(), ConsoleError> {
     let host = terminal_host();
     let addr = format!("{}:{}", host, DEFAULT_TERMINAL_PORT);
 
@@ -255,7 +254,6 @@ pub fn connect(vm: &str, session: &str) -> Result<(), ConsoleError> {
     let (cols, rows) = get_terminal_size();
     let request = ConnectRequest {
         vm: vm.to_string(),
-        session: session.to_string(),
         token,
         cols,
         rows,
@@ -455,17 +453,17 @@ mod tests {
     fn test_connect_request_serialization() {
         let request = ConnectRequest {
             vm: "test-vm".to_string(),
-            session: "abc123".to_string(),
             token: "secret-token".to_string(),
             cols: 120,
             rows: 40,
         };
         let json = serde_json::to_string(&request).unwrap();
         assert!(json.contains("test-vm"));
-        assert!(json.contains("abc123"));
         assert!(json.contains("secret-token"));
         assert!(json.contains("120"));
         assert!(json.contains("40"));
+        // Session field should not be present
+        assert!(!json.contains("session"));
     }
 
     #[test]
