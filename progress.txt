@@ -1803,5 +1803,36 @@
 - All 91 tests pass with zero clippy warnings
 - Commit: fa3df84
 
+### Task 101: OSC Title Prefix and Terminfo Upload
+- Implemented two remaining features from Task 99 PRD spec
+- **OSC Title Prefix (console.rs):**
+  - Added OscState enum state machine for parsing OSC sequences
+  - Detects OSC title sequences: \x1b]0;{title}\x07 and \x1b]0;{title}\x1b\\
+  - Also handles OSC code 2 (window title)
+  - Rewrites titles with "fcm: " prefix for clarity
+  - process_osc_titles() processes binary data chunk by chunk
+  - Handles titles split across multiple WebSocket frames
+  - Non-title OSC sequences (e.g., hyperlinks) pass through unchanged
+  - Added 8 new unit tests for OSC processing
+- **Terminfo Upload Endpoint (daemon.rs):**
+  - New endpoint: PUT /vms/{vm}/fs?path=/path/to/file
+  - Uploads file content to VM via SSH (using sshpass)
+  - Security: only allows paths in /usr/share/terminfo/ and /tmp/
+  - Rejects uploads to sensitive paths (e.g., /etc, /root)
+  - Added upload_file_to_vm() helper function
+  - Added route in handle_request() for PUT /vms/{vm}/fs
+- **Client-side Terminfo Helper (console.rs):**
+  - Added upload_terminfo(vm, term) function
+  - Searches standard terminfo paths (/usr/share/terminfo, /lib/terminfo)
+  - Uploads local terminfo to VM before console connect
+  - Enabled via FCM_UPLOAD_TERMINFO=1 environment variable
+  - Best-effort: failure doesn't prevent console connection
+- Testing verified:
+  - File upload to /tmp/test-upload.txt works
+  - Terminfo upload to /usr/share/terminfo/x/xterm-256color works
+  - Invalid paths (e.g., /etc/passwd) are rejected with 403
+- All 101 tests pass with zero clippy warnings
+- Commit: 4e3247d
+
 ## Next Tasks
-- None currently - Environment variable passthrough complete
+- None currently - OSC title prefix and terminfo upload complete
