@@ -521,3 +521,619 @@ Solution: Use ioctl(TIOCSWINSZ) on master FD when client sends resize message.
    ps aux
    # Should NOT see fcm-agent, only: init, getty/agetty, shell
    ```
+
+## Task 99: WebSocket Console Protocol (Sprite-style)
+
+### Summary
+
+Migrate fcm console from raw TCP (port 7778) to WebSocket over TLS (port 443), following Sprite's complete protocol design including:
+- Auth in WebSocket upgrade headers
+- Environment passthrough (TERM, SHELL, etc.)
+- Terminfo sync (upload terminfo before connect)
+- OSC title sequences (terminal title updates)
+- Pure binary frames for terminal I/O
+- TLS via Caddy (one less port to manage)
+
+**Note:** zsh is already in the base image (Task 98). This task focuses on the complete WebSocket terminal protocol.
+
+### Current State
+
+- **Server** (`daemon.rs:1180-1416`): TCP on port 7778, JSON handshake + raw bytes
+- **Client** (`console.rs:234-419`): TcpStream, SIGWINCH handler, two-thread I/O
+- **Protocol flaw**: Resize messages detected by `starts_with(b"{\"resize\"")` - fragile
+- **Extra port**: Port 7778 must be exposed separately from HTTPS
+
+### Target State (Sprite-style)
+
+- **Transport**: WebSocket over TLS (wss://) via Caddy on port 443
+- **Auth**: Bearer token in HTTP header during WebSocket upgrade
+- **Connection params**: VM name, terminal size, env vars in URL query string
+- **Terminal I/O**: Pure binary WebSocket frames after handshake
+- **Resize**: Text frame with JSON
+- **Terminfo**: Upload before connect (optional)
+- **OSC title**: Server sends title updates to client
+
+### Architecture
+
+```
+┌─────────────┐         ┌─────────────┐         ┌─────────────┐         ┌───────────────┐
+│  fcm CLI    │ ──wss── │   Caddy     │ ──ws─── │   Daemon    │ ──PTY── │  Firecracker  │
+│ (any host)  │  :443   │  (TLS+proxy)│ :7778   │  (internal) │  master │  serial ttyS0 │
+└─────────────┘         └─────────────┘         └─────────────┘         └───────────────┘
+```
+
+- Caddy handles TLS termination and certificate management
+- Daemon listens on `127.0.0.1:7778` (localhost only, not exposed)
+- Single external port (443) for both HTTP API and WebSocket console
+- Firewall-friendly (port 443 almost always allowed)
+
+### Protocol Specification
+
+#### Pre-Connection: Terminfo Upload (Optional)
+
+Before WebSocket connect, client uploads terminfo to VM:
+
+```
+PUT /vms/{vm-name}/fs?path=/usr/share/terminfo/{first-char}/{term-type}
+Authorization: Bearer {token}
+Content-Type: application/octet-stream
+
+<binary terminfo data>
+```
+
+This ensures the VM has proper terminfo for the client's terminal type.
+
+#### WebSocket Connection
+
+```
+WebSocket URL:
+  wss://fcm.{ip}.sslip.io/console?vm={vm-name}&cols={cols}&rows={rows}&env=TERM=xterm-256color&env=SHELL=/bin/zsh
+
+Query Parameters:
+  vm        - VM name (required)
+  cols      - Terminal width (default: 80)
+  rows      - Terminal height (default: 24)
+  env       - Environment variable (repeatable), format: KEY=value
+              Common: TERM, SHELL, COLORTERM, LANG, LC_ALL
+
+HTTP Headers (during WebSocket upgrade):
+  Authorization: Bearer {token}
+  Upgrade: websocket
+  Connection: Upgrade
+  Sec-WebSocket-Version: 13
+
+Response:
+  101 Switching Protocols (success)
+  401 Unauthorized (bad token)
+  404 Not Found (VM not found)
+  403 Forbidden (access denied)
+```
+
+#### After 101: Message Flow
+
+```
+Client → Server:
+  - Binary frames: keyboard input (raw bytes)
+  - Text frames: control messages (resize)
+
+Server → Client:
+  - Binary frames: terminal output (raw bytes)
+    - Includes shell prompt, command output
+    - Includes OSC sequences for title updates
+  - Text frames: (reserved for future control messages)
+
+Resize message (Text frame, Client → Server):
+  {"type":"resize","cols":120,"rows":40}
+```
+
+#### OSC Title Sequences
+
+Server sends OSC escape sequences embedded in terminal output:
+
+```
+Set title:     \x1b]0;{vm-name}: {process}\x07
+               \x1b]0;cosmic-nova: zsh --login\x07
+
+Client should:
+  1. Detect OSC sequences in binary output
+  2. Extract title from sequence
+  3. Update terminal title (optional prefix: "fcm: ")
+```
+
+#### Environment Variables
+
+Common env vars to pass:
+
+| Variable | Example | Description |
+|----------|---------|-------------|
+| `TERM` | `xterm-256color` | Terminal type |
+| `SHELL` | `/bin/zsh` | User's shell |
+| `COLORTERM` | `truecolor` | Color support |
+| `LANG` | `en_US.UTF-8` | Locale |
+| `LC_ALL` | `en_US.UTF-8` | Locale override |
+
+### Benefits Over Current Protocol
+
+| Current TCP | Sprite-style WebSocket |
+|-------------|------------------------|
+| Separate port 7778 | Single port 443 (via Caddy) |
+| No TLS | TLS with auto-renewed certs |
+| JSON auth message after connect | Auth in HTTP headers (standard) |
+| Fragile resize detection | WebSocket frame types separate control |
+| Custom protocol | Standard WebSocket (browser-compatible) |
+| No ping/pong | Built-in keepalive |
+| No env passthrough | Full environment passthrough |
+| No terminfo sync | Client can upload terminfo |
+| No title updates | OSC title sequences |
+
+### Implementation Steps
+
+#### Step 1: Add dependencies
+
+**File: `Cargo.toml`**
+
+```toml
+tungstenite = { version = "0.24", features = ["native-tls"] }  # WebSocket with TLS
+url = "2"  # For URL parsing
+native-tls = "0.2"  # TLS for wss:// client connections
+```
+
+#### Step 2: Configure Caddy to proxy WebSocket
+
+Add WebSocket proxy to Caddyfile for the `/console` path:
+
+```caddyfile
+fcm.{ip}.sslip.io {
+    # Existing routes...
+
+    # WebSocket console - proxy to daemon
+    handle /console {
+        reverse_proxy 127.0.0.1:7778
+    }
+}
+```
+
+Caddy automatically handles:
+- TLS termination (Let's Encrypt)
+- WebSocket upgrade detection
+- Connection keep-alive
+
+#### Step 3: Update daemon.rs - WebSocket server (localhost only)
+
+Daemon listens on `127.0.0.1:7778` (not exposed externally - Caddy proxies to it).
+
+**New structs:**
+```rust
+/// Parsed WebSocket console request
+struct WsConsoleRequest {
+    vm: String,
+    token: String,
+    cols: u16,
+    rows: u16,
+    env: HashMap<String, String>,  // Environment variables
+}
+```
+
+**New functions:**
+```rust
+/// Parse HTTP upgrade request before WebSocket handshake
+fn parse_ws_upgrade_request(buf: &[u8]) -> Result<WsConsoleRequest, (u16, &'static str)>
+
+/// Parse query string into key-value pairs (handles repeated keys for env)
+fn parse_query_params(query: &str) -> (HashMap<String, String>, Vec<(String, String)>)
+
+/// Send HTTP error response (before WebSocket)
+fn send_http_error(stream: &mut TcpStream, status: u16, message: &str)
+```
+
+**Bind to localhost only:**
+```rust
+// In run_terminal_server()
+let listener = TcpListener::bind("127.0.0.1:7778")?;  // localhost only, Caddy proxies
+```
+
+**Updated handle_terminal_connection():**
+```rust
+fn handle_terminal_connection(stream: TcpStream, daemon_token: &str, console_fds: &ConsoleFds) {
+    // 1. Read HTTP request (peek or buffer)
+    let mut buf = [0u8; 4096];
+    let n = stream.peek(&mut buf)?;
+
+    // 2. Parse request to get auth and params
+    let request = match parse_ws_upgrade_request(&buf[..n]) {
+        Ok(r) => r,
+        Err((status, msg)) => {
+            send_http_error(&mut stream, status, msg);
+            return;
+        }
+    };
+
+    // 3. Validate token
+    let access_level = validate_token(&request.token, daemon_token)?;
+
+    // 4. Find VM and check access
+    let config = vm::find_vm(&request.vm)?;
+    if !access_level.can_access_vm(&config) {
+        send_http_error(&mut stream, 403, "Access denied");
+        return;
+    }
+
+    // 5. Check VM running
+    if config.state != VmState::Running {
+        send_http_error(&mut stream, 503, "VM not running");
+        return;
+    }
+
+    // 6. Get PTY FD
+    let master_fd = match console_fds.lock().unwrap().get(&config.id) {
+        Some(&fd) => fd,
+        None => {
+            send_http_error(&mut stream, 503, "Console not available");
+            return;
+        }
+    };
+
+    // 7. Complete WebSocket handshake
+    let websocket = tungstenite::accept(stream)?;
+
+    // 8. Set terminal size
+    set_pty_window_size(master_fd, request.cols, request.rows);
+
+    // 9. Set environment variables in VM (write to PTY)
+    for (key, value) in &request.env {
+        let export_cmd = format!("export {}={}\n", key, shell_escape(value));
+        unsafe { libc::write(master_fd, export_cmd.as_ptr() as *const _, export_cmd.len()) };
+    }
+
+    // 10. Proxy WebSocket <-> PTY
+    proxy_websocket_pty(websocket, master_fd, &config.name);
+}
+```
+
+**Updated proxy_websocket_pty() with OSC title:**
+```rust
+fn proxy_websocket_pty(
+    websocket: WebSocket<TcpStream>,
+    master_fd: RawFd,
+    vm_name: &str,  // For OSC title prefix
+) {
+    // Send initial OSC title: "\x1b]0;{vm_name}: zsh\x07"
+    let initial_title = format!("\x1b]0;{}: zsh\x07", vm_name);
+    websocket.send(Message::Binary(initial_title.into_bytes()))?;
+
+    // Reader thread: PTY -> Binary WebSocket frames
+    //   (OSC sequences from shell pass through naturally)
+
+    // Main thread: WebSocket frames -> PTY
+    //   Binary -> write to PTY
+    //   Text with resize -> TIOCSWINSZ
+}
+```
+
+#### Step 4: Add terminfo upload endpoint to daemon HTTP server
+
+**New endpoint in daemon's HTTP server (port 7777):**
+
+```
+PUT /vms/{vm}/fs
+Query params:
+  path - file path in VM (e.g., /usr/share/terminfo/x/xterm-256color)
+Body: binary file content
+
+Implementation:
+  1. Validate token and VM access
+  2. Get VM's IP address
+  3. SCP file content to VM (via SSH)
+```
+
+This is optional but improves terminal compatibility.
+
+#### Step 5: Update console.rs - WebSocket client
+
+**New connect() flow:**
+```rust
+pub fn connect(vm: &str) -> Result<(), ConsoleError> {
+    let host = api_host();  // e.g., "fcm.64-34-93-45.sslip.io"
+    let token = load_token()?;
+    let (cols, rows) = get_terminal_size();
+
+    // Gather environment variables
+    let term = env::var("TERM").unwrap_or_else(|_| "xterm-256color".to_string());
+    let shell = env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+    let colorterm = env::var("COLORTERM").ok();
+    let lang = env::var("LANG").ok();
+
+    // Optional: Upload terminfo before connect
+    // upload_terminfo(vm, &term)?;
+
+    // Build WebSocket URL with query params (wss:// via Caddy)
+    let mut url = format!(
+        "wss://{}/console?vm={}&cols={}&rows={}&env=TERM={}&env=SHELL={}",
+        host,
+        url_encode(vm), cols, rows,
+        url_encode(&term), url_encode(&shell)
+    );
+    if let Some(ct) = colorterm {
+        url.push_str(&format!("&env=COLORTERM={}", url_encode(&ct)));
+    }
+    if let Some(l) = lang {
+        url.push_str(&format!("&env=LANG={}", url_encode(&l)));
+    }
+
+    // Connect with auth header (TLS handled by tungstenite)
+    let request = tungstenite::http::Request::builder()
+        .uri(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .body(())?;
+
+    print!("Connecting to {}...", vm);
+    io::stdout().flush()?;
+
+    let (websocket, response) = tungstenite::connect(request)
+        .map_err(|e| ConsoleError::ConnectionFailed(e.to_string()))?;
+
+    if response.status() != 101 {
+        println!(" failed");
+        return Err(ConsoleError::AuthFailed(format!("HTTP {}", response.status())));
+    }
+
+    println!(" connected\r\n");
+
+    // Enter raw terminal mode
+    if !is_tty() {
+        return Err(ConsoleError::TerminalError("stdin is not a terminal".into()));
+    }
+    let _raw_terminal = RawTerminal::enable()?;
+
+    // Install SIGWINCH handler
+    install_sigwinch_handler();
+
+    // Proxy WebSocket <-> terminal
+    proxy_websocket_terminal(websocket, vm)?;
+
+    Ok(())
+}
+```
+
+**OSC title handling in client:**
+```rust
+fn handle_osc_title(data: &[u8], vm_name: &str) {
+    // Detect OSC sequence: \x1b]0;{title}\x07 or \x1b]0;{title}\x1b\\
+    // Extract title and set terminal title with prefix
+    // set_terminal_title(&format!("fcm: {}", title));
+}
+
+fn set_terminal_title(title: &str) {
+    // Write OSC sequence to stdout
+    print!("\x1b]0;{}\x07", title);
+    io::stdout().flush().ok();
+}
+```
+
+**Resize handling:**
+```rust
+// When SIGWINCH received:
+let resize_msg = format!(r#"{{"type":"resize","cols":{},"rows":{}}}"#, cols, rows);
+websocket.send(Message::Text(resize_msg))?;
+```
+
+#### Step 6: Optional - Terminfo upload helper
+
+```rust
+/// Upload local terminfo to VM before connecting
+fn upload_terminfo(host: &str, vm: &str, term: &str) -> Result<(), ConsoleError> {
+    let token = load_token()?;
+
+    // Find local terminfo file
+    let terminfo_path = format!("/usr/share/terminfo/{}/{}",
+        term.chars().next().unwrap(), term);
+
+    let terminfo_data = std::fs::read(&terminfo_path)
+        .map_err(|_| ConsoleError::TerminalError("Cannot read terminfo".into()))?;
+
+    // Upload to VM (via HTTPS)
+    let url = format!("https://{}/vms/{}/fs?path={}",
+        host, vm, url_encode(&terminfo_path));
+
+    ureq::put(&url)
+        .set("Authorization", &format!("Bearer {}", token))
+        .set("Content-Type", "application/octet-stream")
+        .send_bytes(&terminfo_data)?;
+
+    Ok(())
+}
+```
+
+#### Step 7: Cleanup old code
+
+**Remove from daemon.rs:**
+- `TerminalConnectRequest` struct
+- `TerminalConnectResponse` struct
+- `send_terminal_error()` function
+- `send_terminal_response()` function
+- `parse_resize_message()` function (replaced by JSON parsing)
+- `proxy_pty_io()` function (replaced by `proxy_websocket_pty`)
+
+**Remove from console.rs:**
+- `ConnectRequest` struct
+- `ConnectResponse` struct
+- `make_resize_message()` function
+
+#### Step 8: Add tests
+
+```rust
+#[test]
+fn test_parse_ws_query_params() {
+    let query = "vm=cosmic-nova&cols=120&rows=40&env=TERM=xterm&env=SHELL=/bin/zsh";
+    let (params, envs) = parse_query_params(query);
+    assert_eq!(params.get("vm"), Some(&"cosmic-nova".to_string()));
+    assert_eq!(params.get("cols"), Some(&"120".to_string()));
+    assert_eq!(envs.len(), 2);
+}
+
+#[test]
+fn test_osc_title_detection() {
+    let data = b"Hello\x1b]0;my-vm: zsh\x07World";
+    // Test OSC extraction
+}
+
+#[test]
+fn test_resize_message_format() {
+    let msg = r#"{"type":"resize","cols":120,"rows":40}"#;
+    // verify parsing
+}
+```
+
+### Files to Modify
+
+| File | Changes |
+|------|---------|
+| `Cargo.toml` | Add `tungstenite = "0.24"`, `url = "2"`, TLS deps |
+| `src/daemon.rs` | WebSocket server on 127.0.0.1:7778, env passthrough, OSC support (~200 lines) |
+| `src/console.rs` | WebSocket client with wss://, env passthrough, terminfo upload (~150 lines) |
+| `src/caddy.rs` | Add `/console` WebSocket proxy route to Caddyfile generation |
+
+### Verification
+
+1. **Build and test:**
+   ```bash
+   cargo build
+   cargo test
+   cargo clippy
+   ```
+
+2. **Start daemon:**
+   ```bash
+   sudo ./target/debug/fcm daemon
+   ```
+
+3. **Verify Caddy config includes WebSocket proxy:**
+   ```bash
+   grep -A2 "/console" /etc/caddy/Caddyfile
+   # Should show: handle /console { reverse_proxy 127.0.0.1:7778 }
+   ```
+
+4. **Create test VM:**
+   ```bash
+   fcm create
+   ```
+
+5. **Test console with environment:**
+   ```bash
+   fcm console <vm-name>
+   # Verify shell prompt (zsh)
+   # Check environment:
+   echo $TERM      # Should show xterm-256color
+   echo $SHELL     # Should show /bin/zsh
+   # Check terminal title updates (if terminal supports)
+   ```
+
+6. **Test colors and terminal features:**
+   ```bash
+   # In console:
+   ls --color=auto
+   vim  # Should have proper terminfo
+   htop # Should work with colors
+   ```
+
+7. **Test resize:**
+   ```bash
+   # Resize terminal window
+   # Run: stty size
+   # Should show new dimensions
+   ```
+
+8. **Test reconnect:**
+   ```bash
+   # Ctrl+] to disconnect
+   fcm console <vm-name>
+   # Should reconnect, shell state preserved
+   ```
+
+9. **Test TLS is working:**
+   ```bash
+   # Connection should use wss:// (TLS)
+   # No certificate warnings
+   # Works through corporate firewalls (port 443)
+   ```
+
+10. **Test error cases:**
+    ```bash
+    FCM_TOKEN=invalid fcm console <vm-name>  # 401
+    fcm console nonexistent-vm               # 404
+    ```
+
+11. **Cleanup:**
+    ```bash
+    fcm destroy <vm-name>
+    ```
+
+### Technical Notes
+
+#### Environment Variable Injection
+
+Two approaches for passing env vars to shell:
+
+1. **Query params** (chosen): Pass in URL, daemon writes `export` commands to PTY
+   - Pro: Works with any shell
+   - Con: Commands visible in shell history
+
+2. **PTY environment**: Set env vars on PTY before shell starts
+   - Pro: Cleaner
+   - Con: Requires PTY to be set up before shell (not possible with serial console)
+
+For serial console (our architecture), option 1 is the only choice.
+
+#### OSC Title Flow
+
+```
+Shell in VM               Daemon                    Client Terminal
+     |                       |                           |
+     |-- OSC: "zsh" -------->|                           |
+     |                       |-- Binary frame: OSC ----->|
+     |                       |                           |-- Set title: "fcm: zsh"
+```
+
+The shell (zsh) naturally sends OSC sequences. The daemon passes them through in binary frames. The client detects and processes them.
+
+#### Threading Model
+
+Same as current implementation:
+- Server: Thread per connection
+- Client: Reader thread + main thread for stdin
+- Use `Arc<Mutex<WebSocket>>` for shared write access
+
+#### Caddy WebSocket Proxy
+
+Caddy handles:
+- TLS termination (Let's Encrypt certificates)
+- WebSocket upgrade detection (automatic)
+- Proxying to daemon on localhost:7778
+- Connection timeouts and keep-alive
+
+The daemon receives plain WebSocket (ws://) from Caddy, not TLS. This simplifies daemon code.
+
+#### tungstenite Usage
+
+**Server (daemon):** Use `tungstenite::accept_hdr()` to inspect headers during handshake:
+
+```rust
+let callback = |req: &Request, response: Response| {
+    // Extract Authorization header
+    // Extract query params
+    // Validate here, return error to reject
+    Ok(response)
+};
+let websocket = accept_hdr(stream, callback)?;
+```
+
+**Client:** Use `tungstenite::connect()` with TLS connector:
+
+```rust
+use native_tls::TlsConnector;
+use tungstenite::client::IntoClientRequest;
+
+let request = url.into_client_request()?;
+let connector = TlsConnector::new()?;
+let (websocket, _) = tungstenite::connect(request)?;  // TLS handled automatically for wss://
+```

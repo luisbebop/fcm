@@ -105,6 +105,63 @@ fn generate_caddy_block(domain: &str, vm_ip: &str, port: u16) -> String {
     )
 }
 
+/// Generate Caddy config block for the fcm status page with WebSocket console support
+/// This creates a block that routes:
+/// - /console -> localhost:7778 (WebSocket terminal)
+/// - /* -> localhost:7780 (status page)
+pub fn generate_fcm_domain_block(domain: &str, status_port: u16, console_port: u16) -> String {
+    format!(
+        r#"
+# fcm-managed: {}
+{} {{
+    handle /console {{
+        reverse_proxy localhost:{}
+    }}
+    handle {{
+        reverse_proxy localhost:{}
+    }}
+}}
+"#,
+        domain, domain, console_port, status_port
+    )
+}
+
+/// Add the fcm status page domain with WebSocket console support
+pub fn add_fcm_domain(domain: &str, status_port: u16, console_port: u16) -> Result<()> {
+    add_fcm_domain_to_file(domain, status_port, console_port, CADDYFILE_PATH)
+}
+
+/// Add the fcm status page domain to a specific Caddyfile (for testing)
+pub fn add_fcm_domain_to_file(domain: &str, status_port: u16, console_port: u16, caddyfile_path: &str) -> Result<()> {
+    // Ensure parent directory exists
+    if let Some(parent) = std::path::Path::new(caddyfile_path).parent() {
+        if !parent.exists() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+
+    // Read existing Caddyfile or create empty
+    let existing = fs::read_to_string(caddyfile_path).unwrap_or_default();
+
+    // Check if domain already exists
+    if existing.contains(&format!("# fcm-managed: {}", domain)) {
+        // Remove old block first
+        let cleaned = remove_site_block(&existing, domain);
+        let block = generate_fcm_domain_block(domain, status_port, console_port);
+        let new_content = format!("{}{}", cleaned, block);
+        fs::write(caddyfile_path, new_content)?;
+        return Ok(());
+    }
+
+    // Append new block
+    let block = generate_fcm_domain_block(domain, status_port, console_port);
+    let new_content = format!("{}{}", existing, block);
+
+    fs::write(caddyfile_path, new_content)?;
+
+    Ok(())
+}
+
 /// Add a VM to the Caddyfile and reload
 pub fn add_site(domain: &str, vm_ip: &str, port: u16) -> Result<()> {
     add_site_to_file(domain, vm_ip, port, CADDYFILE_PATH)
@@ -408,5 +465,29 @@ other.com {
     #[test]
     fn test_caddyfile_path_constant() {
         assert_eq!(CADDYFILE_PATH, "/etc/caddy/Caddyfile");
+    }
+
+    #[test]
+    fn test_generate_fcm_domain_block() {
+        let block = generate_fcm_domain_block("fcm.64-34-93-45.sslip.io", 7780, 7778);
+        assert!(block.contains("# fcm-managed: fcm.64-34-93-45.sslip.io"));
+        assert!(block.contains("fcm.64-34-93-45.sslip.io {"));
+        assert!(block.contains("handle /console {"));
+        assert!(block.contains("reverse_proxy localhost:7778"));
+        assert!(block.contains("reverse_proxy localhost:7780"));
+    }
+
+    #[test]
+    fn test_add_fcm_domain_to_file() {
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path().to_str().unwrap();
+
+        add_fcm_domain_to_file("fcm.64-34-93-45.sslip.io", 7780, 7778, path).unwrap();
+
+        let content = fs::read_to_string(path).unwrap();
+        assert!(content.contains("# fcm-managed: fcm.64-34-93-45.sslip.io"));
+        assert!(content.contains("handle /console {"));
+        assert!(content.contains("reverse_proxy localhost:7778"));
+        assert!(content.contains("reverse_proxy localhost:7780"));
     }
 }

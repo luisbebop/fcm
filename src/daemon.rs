@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::error::Error;
 use std::fs;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::os::unix::io::RawFd;
 use std::path::PathBuf;
@@ -16,6 +16,8 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Instant;
 use tiny_http::{Header, Method, Request, Response, Server};
+use tungstenite::handshake::server::{Request as WsRequest, Response as WsResponse};
+use tungstenite::protocol::Message;
 
 /// PTY master file descriptors for console access (VM ID -> master FD)
 type ConsoleFds = Arc<Mutex<HashMap<String, RawFd>>>;
@@ -28,8 +30,8 @@ struct CreateVmRequest {
 
 const BIND_ADDR: &str = "0.0.0.0:7777";
 
-/// Terminal server bind address
-const TERMINAL_BIND_ADDR: &str = "0.0.0.0:7778";
+/// Terminal server bind address (localhost only - Caddy proxies external connections)
+const TERMINAL_BIND_ADDR: &str = "127.0.0.1:7778";
 
 /// Default port to expose for all VMs
 const DEFAULT_EXPOSE_PORT: u16 = 3000;
@@ -662,29 +664,6 @@ fn html_escape(s: &str) -> String {
         .replace('\'', "&#x27;")
 }
 
-/// Terminal connect request from client (per PRD spec)
-#[derive(Debug, Deserialize)]
-struct TerminalConnectRequest {
-    vm: String,
-    token: String,
-    /// Terminal width
-    #[serde(default = "default_cols")]
-    cols: u16,
-    /// Terminal height
-    #[serde(default = "default_rows")]
-    rows: u16,
-}
-
-fn default_cols() -> u16 { 80 }
-fn default_rows() -> u16 { 24 }
-
-/// Terminal connect response to client
-#[derive(Debug, Serialize)]
-struct TerminalConnectResponse {
-    success: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
-}
 
 /// Response for VM operations
 #[derive(Debug, Serialize)]
@@ -1176,60 +1155,147 @@ fn handle_request(
     }
 }
 
-/// Handle a single terminal connection using direct PTY I/O
+/// WebSocket console request parsed from HTTP upgrade
+struct WsConsoleRequest {
+    vm: String,
+    token: String,
+    cols: u16,
+    rows: u16,
+    #[allow(dead_code)]
+    env: HashMap<String, String>,
+}
+
+/// Parse query string into params, handling repeated keys for env vars
+fn parse_ws_query_params(query: &str) -> (HashMap<String, String>, Vec<(String, String)>) {
+    let mut params = HashMap::new();
+    let mut env_vars = Vec::new();
+
+    for pair in query.split('&') {
+        if let Some((key, value)) = pair.split_once('=') {
+            let key = url_decode(key);
+            let value = url_decode(value);
+
+            if key == "env" {
+                // Parse env var: "KEY=value"
+                if let Some((env_key, env_val)) = value.split_once('=') {
+                    env_vars.push((env_key.to_string(), env_val.to_string()));
+                }
+            } else {
+                params.insert(key, value);
+            }
+        }
+    }
+
+    (params, env_vars)
+}
+
+/// HTTP response type for WebSocket callback errors
+type WsErrorResponse = tungstenite::http::Response<Option<String>>;
+
+/// Handle a single terminal connection using WebSocket over PTY
 fn handle_terminal_connection(
-    mut stream: TcpStream,
+    stream: TcpStream,
     token: &str,
     console_fds: &ConsoleFds,
 ) {
-    // Set a read timeout for the initial handshake
-    if stream
-        .set_read_timeout(Some(std::time::Duration::from_secs(10)))
-        .is_err()
-    {
-        return;
-    }
+    // Use RefCell for interior mutability to share with closure
+    use std::cell::RefCell;
 
-    // Read the JSON connect request (terminated by newline)
-    let read_stream = match stream.try_clone() {
-        Ok(s) => s,
-        Err(_) => {
-            let _ = send_terminal_error(&mut stream, "Failed to clone stream");
-            return;
+    // Variables to store parsed request info from callback
+    let parsed_request: RefCell<Option<WsConsoleRequest>> = RefCell::new(None);
+    let token_copy = token.to_string();
+
+    // Use accept_hdr to inspect HTTP headers during WebSocket handshake
+    let callback = |req: &WsRequest, response: WsResponse| -> Result<WsResponse, WsErrorResponse> {
+        // Extract Authorization header
+        let auth_header = req.headers()
+            .iter()
+            .find(|(name, _)| name.as_str().eq_ignore_ascii_case("authorization"))
+            .map(|(_, value)| value.to_str().unwrap_or_default().to_string());
+
+        let bearer_token = auth_header
+            .as_ref()
+            .and_then(|h| h.strip_prefix("Bearer "))
+            .map(|t| t.trim().to_string());
+
+        // Parse query params from URI
+        let uri = req.uri().to_string();
+        let query = uri.split_once('?').map(|(_, q)| q).unwrap_or("");
+        let (params, env_vars) = parse_ws_query_params(query);
+
+        // Extract VM name (required)
+        let vm_name = params.get("vm").cloned().unwrap_or_default();
+        if vm_name.is_empty() {
+            return Err(tungstenite::http::Response::builder()
+                .status(400)
+                .body(Some("Missing vm parameter".to_string()))
+                .unwrap());
         }
+
+        // Extract terminal size
+        let cols: u16 = params.get("cols").and_then(|c| c.parse().ok()).unwrap_or(80);
+        let rows: u16 = params.get("rows").and_then(|r| r.parse().ok()).unwrap_or(24);
+
+        // Build env map
+        let mut env = HashMap::new();
+        for (k, v) in env_vars {
+            env.insert(k, v);
+        }
+
+        // Validate token
+        let request_token = bearer_token.unwrap_or_default();
+        if request_token.is_empty() {
+            return Err(tungstenite::http::Response::builder()
+                .status(401)
+                .body(Some("Missing Authorization header".to_string()))
+                .unwrap());
+        }
+
+        // Store parsed request for later use
+        *parsed_request.borrow_mut() = Some(WsConsoleRequest {
+            vm: vm_name,
+            token: request_token,
+            cols,
+            rows,
+            env,
+        });
+
+        Ok(response)
     };
-    let mut reader = BufReader::new(read_stream);
-    let mut request_line = String::new();
 
-    if reader.read_line(&mut request_line).is_err() {
-        let _ = send_terminal_error(&mut stream, "Failed to read request");
-        return;
-    }
-
-    // Parse the connect request
-    let request: TerminalConnectRequest = match serde_json::from_str(&request_line) {
-        Ok(req) => req,
+    // Accept WebSocket connection with callback for header inspection
+    let websocket = match tungstenite::accept_hdr(stream, callback) {
+        Ok(ws) => ws,
         Err(e) => {
-            let _ = send_terminal_error(&mut stream, &format!("Invalid request: {}", e));
+            eprintln!("WebSocket handshake failed: {:?}", e);
             return;
         }
     };
 
-    println!("Terminal connection: vm={}", request.vm);
+    // Get the parsed request
+    let request = match parsed_request.into_inner() {
+        Some(req) => req,
+        None => {
+            eprintln!("No request parsed from WebSocket handshake");
+            return;
+        }
+    };
+
+    println!("WebSocket console connection: vm={}", request.vm);
 
     // Validate token and get access level
-    let access_level = if request.token == token {
+    let access_level = if request.token == token_copy {
         AccessLevel::Admin
     } else if request.token.starts_with("fcm_") {
         match get_user_from_token(&request.token) {
             Some(user) => AccessLevel::User { id: user.id, is_admin: user.is_admin },
             None => {
-                let _ = send_terminal_error(&mut stream, "Invalid token");
+                eprintln!("Invalid user token for WebSocket console");
                 return;
             }
         }
     } else {
-        let _ = send_terminal_error(&mut stream, "Invalid token");
+        eprintln!("Invalid token for WebSocket console");
         return;
     };
 
@@ -1237,20 +1303,20 @@ fn handle_terminal_connection(
     let config = match vm::find_vm(&request.vm) {
         Ok(config) => config,
         Err(_) => {
-            let _ = send_terminal_error(&mut stream, &format!("VM '{}' not found", request.vm));
+            eprintln!("VM '{}' not found for WebSocket console", request.vm);
             return;
         }
     };
 
     // Check access
     if !access_level.can_access_vm(&config) {
-        let _ = send_terminal_error(&mut stream, "Access denied");
+        eprintln!("Access denied to VM '{}' for WebSocket console", request.vm);
         return;
     }
 
     // Check VM is running
     if config.state != VmState::Running {
-        let _ = send_terminal_error(&mut stream, &format!("VM '{}' is not running", request.vm));
+        eprintln!("VM '{}' is not running for WebSocket console", request.vm);
         return;
     }
 
@@ -1258,47 +1324,18 @@ fn handle_terminal_connection(
     let master_fd = match console_fds.lock().unwrap().get(&config.id).copied() {
         Some(fd) => fd,
         None => {
-            let _ = send_terminal_error(&mut stream, "Console not available (VM may need restart)");
+            eprintln!("Console not available for VM '{}' (VM may need restart)", request.vm);
             return;
         }
     };
 
-    // Send success response to client
-    let response = TerminalConnectResponse {
-        success: true,
-        error: None,
-    };
-    if let Err(e) = send_terminal_response(&mut stream, &response) {
-        eprintln!("Failed to send success response: {}", e);
-        return;
-    }
-
-    // Clear read timeout for I/O proxying
-    let _ = stream.set_read_timeout(None);
-
     // Set initial terminal size
     set_pty_window_size(master_fd, request.cols, request.rows);
 
-    // Proxy raw bytes between client and PTY
-    proxy_pty_io(stream, master_fd);
+    // Proxy WebSocket messages to/from PTY
+    proxy_websocket_pty(websocket, master_fd, &config.name);
 }
 
-/// Send an error response to the terminal client
-fn send_terminal_error(stream: &mut TcpStream, message: &str) -> std::io::Result<()> {
-    let response = TerminalConnectResponse {
-        success: false,
-        error: Some(message.to_string()),
-    };
-    send_terminal_response(stream, &response)
-}
-
-/// Send a JSON response to the terminal client
-fn send_terminal_response(stream: &mut TcpStream, response: &TerminalConnectResponse) -> std::io::Result<()> {
-    let json = serde_json::to_string(response).unwrap();
-    stream.write_all(json.as_bytes())?;
-    stream.write_all(b"\n")?;
-    stream.flush()
-}
 
 /// Set the PTY window size using ioctl
 fn set_pty_window_size(master_fd: RawFd, cols: u16, rows: u16) {
@@ -1322,83 +1359,7 @@ fn set_pty_window_size(master_fd: RawFd, cols: u16, rows: u16) {
     }
 }
 
-/// Proxy raw bytes between client TCP stream and PTY master
-///
-/// This is the serial console approach - no JSON, no base64, just raw bytes.
-/// The PTY is connected directly to Firecracker's stdin/stdout which connects
-/// to the VM's /dev/ttyS0 serial console.
-fn proxy_pty_io(client_stream: TcpStream, master_fd: RawFd) {
-    use std::os::unix::io::AsRawFd;
-
-    // Clone stream for the reader thread
-    let client_read = match client_stream.try_clone() {
-        Ok(s) => s,
-        Err(_) => return,
-    };
-    let mut client_write = client_stream;
-    let client_write_fd = client_write.as_raw_fd();
-
-    // Thread to read from PTY and write to client
-    let pty_reader_handle = thread::spawn(move || {
-        let mut buf = [0u8; 4096];
-        loop {
-            let n = unsafe { libc::read(master_fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
-            if n <= 0 {
-                break; // EOF or error
-            }
-            if client_write.write_all(&buf[..n as usize]).is_err() {
-                break;
-            }
-            if client_write.flush().is_err() {
-                break;
-            }
-        }
-    });
-
-    // Main thread reads from client and writes to PTY
-    let mut buf = [0u8; 4096];
-    let mut client_read_stream = client_read;
-
-    loop {
-        match client_read_stream.read(&mut buf) {
-            Ok(0) => break, // EOF
-            Ok(n) => {
-                let data = &buf[..n];
-
-                // Check if this is a resize message from client
-                // Resize messages start with {"resize": and are JSON
-                if data.starts_with(b"{\"resize\"") {
-                    // Parse resize message and set window size
-                    if let Ok(msg) = std::str::from_utf8(data) {
-                        if let Some((cols, rows)) = parse_resize_message(msg) {
-                            set_pty_window_size(master_fd, cols, rows);
-                        }
-                    }
-                } else {
-                    // Write raw bytes to PTY
-                    let written = unsafe {
-                        libc::write(master_fd, data.as_ptr() as *const libc::c_void, data.len())
-                    };
-                    if written <= 0 {
-                        break;
-                    }
-                }
-            }
-            Err(_) => break,
-        }
-    }
-
-    // Shutdown the client read side to signal disconnection
-    // This will cause the PTY reader thread to eventually exit when it tries to write
-    unsafe {
-        libc::shutdown(client_write_fd, libc::SHUT_RDWR);
-    }
-
-    // Wait for PTY reader thread to finish
-    let _ = pty_reader_handle.join();
-}
-
-/// Parse a resize message like {"resize":{"cols":120,"rows":40}}
+/// Parse a resize message like {"type":"resize","cols":120,"rows":40}
 fn parse_resize_message(msg: &str) -> Option<(u16, u16)> {
     // Simple parsing - find cols and rows values
     let msg = msg.trim();
@@ -1413,6 +1374,124 @@ fn parse_resize_message(msg: &str) -> Option<(u16, u16)> {
     let rows: u16 = rows_str[..rows_end].parse().ok()?;
 
     Some((cols, rows))
+}
+
+/// Proxy WebSocket messages to/from PTY master
+fn proxy_websocket_pty(
+    websocket: tungstenite::WebSocket<TcpStream>,
+    master_fd: RawFd,
+    vm_name: &str,
+) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    // Send initial OSC title sequence
+    let initial_title = format!("\x1b]0;{}: zsh\x07", vm_name);
+    let mut ws = websocket;
+    if ws.send(Message::Binary(initial_title.into_bytes())).is_err() {
+        return;
+    }
+
+    // Set websocket to non-blocking mode for the reader thread
+    // We need to split read/write, so use Arc<Mutex>
+    let ws_for_write = Arc::new(Mutex::new(ws));
+    let ws_for_read = Arc::clone(&ws_for_write);
+    let running = Arc::new(AtomicBool::new(true));
+    let running_for_reader = Arc::clone(&running);
+
+    // Thread to read from PTY and send as Binary WebSocket frames
+    let pty_reader_handle = thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        while running_for_reader.load(Ordering::Relaxed) {
+            // Use select/poll with timeout to allow checking running flag
+            let mut poll_fds = [libc::pollfd {
+                fd: master_fd,
+                events: libc::POLLIN,
+                revents: 0,
+            }];
+
+            let poll_result = unsafe {
+                libc::poll(poll_fds.as_mut_ptr(), 1, 100) // 100ms timeout
+            };
+
+            if poll_result < 0 {
+                break; // Error
+            }
+            if poll_result == 0 {
+                continue; // Timeout, check running flag
+            }
+
+            // Data available to read
+            let n = unsafe { libc::read(master_fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
+            if n <= 0 {
+                break; // EOF or error
+            }
+
+            // Send as binary WebSocket frame
+            let data = buf[..n as usize].to_vec();
+            let mut ws = match ws_for_read.lock() {
+                Ok(ws) => ws,
+                Err(_) => break,
+            };
+            if ws.send(Message::Binary(data)).is_err() {
+                break;
+            }
+            if ws.flush().is_err() {
+                break;
+            }
+        }
+    });
+
+    // Main thread reads WebSocket messages and writes to PTY
+    loop {
+        let msg = {
+            let mut ws = match ws_for_write.lock() {
+                Ok(ws) => ws,
+                Err(_) => break,
+            };
+            match ws.read() {
+                Ok(msg) => msg,
+                Err(_) => break,
+            }
+        };
+
+        match msg {
+            Message::Binary(data) => {
+                // Write raw bytes to PTY
+                let written = unsafe {
+                    libc::write(master_fd, data.as_ptr() as *const libc::c_void, data.len())
+                };
+                if written <= 0 {
+                    break;
+                }
+            }
+            Message::Text(text) => {
+                // Text frames are control messages (resize)
+                if let Some((cols, rows)) = parse_resize_message(&text) {
+                    set_pty_window_size(master_fd, cols, rows);
+                }
+            }
+            Message::Close(_) => {
+                break;
+            }
+            Message::Ping(data) => {
+                let mut ws = match ws_for_write.lock() {
+                    Ok(ws) => ws,
+                    Err(_) => break,
+                };
+                let _ = ws.send(Message::Pong(data));
+            }
+            Message::Pong(_) => {
+                // Ignore pong
+            }
+            Message::Frame(_) => {
+                // Raw frame, ignore
+            }
+        }
+    }
+
+    // Signal reader thread to stop and wait for it
+    running.store(false, Ordering::Relaxed);
+    let _ = pty_reader_handle.join();
 }
 
 /// Parse HTTP request and extract method, path, headers
@@ -1783,10 +1862,12 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     // Create OAuth session store
     let oauth_sessions: SessionStore = Arc::new(Mutex::new(HashMap::new()));
 
-    // Setup status page domain in Caddy (fcm.{ip}.sslip.io -> localhost:7780)
+    // Setup status page domain in Caddy with WebSocket console support
+    // fcm.{ip}.sslip.io -> /console proxies to 7778, /* to 7780
     let status_domain = caddy::generate_domain("fcm", &server_ip);
     println!("Setting up status page at https://{}", status_domain);
-    if let Err(e) = caddy::add_site(&status_domain, "127.0.0.1", STATUS_PAGE_PORT) {
+    println!("WebSocket console available at wss://{}/console", status_domain);
+    if let Err(e) = caddy::add_fcm_domain(&status_domain, STATUS_PAGE_PORT, 7778) {
         eprintln!("Warning: Failed to add status page to Caddy: {}", e);
     } else if let Err(e) = caddy::reload() {
         eprintln!("Warning: Failed to reload Caddy: {}", e);
@@ -1968,39 +2049,28 @@ mod tests {
     }
 
     #[test]
-    fn test_terminal_connect_request_deserialization() {
-        let json = r#"{"vm": "test-vm", "token": "secret"}"#;
-        let request: TerminalConnectRequest = serde_json::from_str(json).unwrap();
-        assert_eq!(request.vm, "test-vm");
-        assert_eq!(request.token, "secret");
-        assert_eq!(request.cols, 80);  // default
-        assert_eq!(request.rows, 24);  // default
-    }
-
-    #[test]
-    fn test_terminal_connect_response_success() {
-        let response = TerminalConnectResponse {
-            success: true,
-            error: None,
-        };
-        let json = serde_json::to_string(&response).unwrap();
-        assert!(json.contains(r#""success":true"#));
-        assert!(!json.contains("error"));
-    }
-
-    #[test]
-    fn test_terminal_connect_response_error() {
-        let response = TerminalConnectResponse {
-            success: false,
-            error: Some("Session not found".to_string()),
-        };
-        let json = serde_json::to_string(&response).unwrap();
-        assert!(json.contains(r#""success":false"#));
-        assert!(json.contains("Session not found"));
-    }
-
-    #[test]
     fn test_terminal_bind_addr() {
-        assert_eq!(TERMINAL_BIND_ADDR, "0.0.0.0:7778");
+        // Terminal server binds to localhost only - Caddy proxies external connections
+        assert_eq!(TERMINAL_BIND_ADDR, "127.0.0.1:7778");
+    }
+
+    #[test]
+    fn test_parse_ws_query_params() {
+        let query = "vm=cosmic-nova&cols=120&rows=40&env=TERM%3Dxterm&env=SHELL%3D%2Fbin%2Fzsh";
+        let (params, envs) = parse_ws_query_params(query);
+        assert_eq!(params.get("vm"), Some(&"cosmic-nova".to_string()));
+        assert_eq!(params.get("cols"), Some(&"120".to_string()));
+        assert_eq!(params.get("rows"), Some(&"40".to_string()));
+        assert_eq!(envs.len(), 2);
+        assert_eq!(envs[0], ("TERM".to_string(), "xterm".to_string()));
+        assert_eq!(envs[1], ("SHELL".to_string(), "/bin/zsh".to_string()));
+    }
+
+    #[test]
+    fn test_parse_resize_message_new_format() {
+        // New format per PRD spec
+        let msg = r#"{"type":"resize","cols":120,"rows":40}"#;
+        let result = parse_resize_message(msg);
+        assert_eq!(result, Some((120, 40)));
     }
 }

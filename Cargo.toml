@@ -12,6 +12,9 @@ tiny_http = "0.12"
 ureq = { version = "2", features = ["json", "tls"] }
 libc = "0.2"
 dirs = "5"
+tungstenite = { version = "0.24", features = ["native-tls"] }
+url = "2"
+native-tls = "0.2"
 
 [dev-dependencies]
 tempfile = "3"

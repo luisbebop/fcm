@@ -1,23 +1,21 @@
 // Terminal streaming client for persistent console sessions
 //
 // This module handles the client-side terminal streaming:
-// 1. Connects to daemon's terminal server (port 7778)
-// 2. Sends authentication JSON
-// 3. Puts terminal in raw mode for proper TTY experience
-// 4. Proxies stdin/stdout to the TCP connection
+// 1. Connects to daemon via WebSocket over TLS (wss://)
+// 2. Sends auth token in HTTP header during upgrade
+// 3. Passes VM name, terminal size, env vars in URL query params
+// 4. Uses Binary frames for terminal I/O, Text frames for resize
 
-use serde::{Deserialize, Serialize};
 use std::env;
 use std::error::Error;
 use std::fs;
 use std::io::{self, Read, Write};
-use std::net::TcpStream;
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use tungstenite::protocol::Message;
 
 /// Global flag set by SIGWINCH signal handler when terminal is resized
 static RESIZE_PENDING: AtomicBool = AtomicBool::new(false);
@@ -38,13 +36,10 @@ fn install_sigwinch_handler() {
     }
 }
 
-/// Create a resize message in JSON format
+/// Create a resize message in JSON format (per PRD spec: Text frame with JSON)
 fn make_resize_message(cols: u16, rows: u16) -> String {
-    format!("{{\"resize\":{{\"cols\":{},\"rows\":{}}}}}", cols, rows)
+    format!("{{\"type\":\"resize\",\"cols\":{},\"rows\":{}}}", cols, rows)
 }
-
-/// Default daemon terminal port
-const DEFAULT_TERMINAL_PORT: u16 = 7778;
 
 /// Console error types
 #[derive(Debug)]
@@ -57,8 +52,12 @@ pub enum ConsoleError {
     Io(io::Error),
     /// Terminal setup failed
     TerminalError(String),
-    /// Session error from daemon
+    /// Session error from daemon (reserved for future use)
+    #[allow(dead_code)]
     SessionError(String),
+    /// WebSocket error (reserved for future use)
+    #[allow(dead_code)]
+    WebSocket(String),
 }
 
 impl std::fmt::Display for ConsoleError {
@@ -69,6 +68,7 @@ impl std::fmt::Display for ConsoleError {
             ConsoleError::Io(e) => write!(f, "IO error: {}", e),
             ConsoleError::TerminalError(msg) => write!(f, "Terminal error: {}", msg),
             ConsoleError::SessionError(msg) => write!(f, "Session error: {}", msg),
+            ConsoleError::WebSocket(msg) => write!(f, "WebSocket error: {}", msg),
         }
     }
 }
@@ -81,37 +81,41 @@ impl From<io::Error> for ConsoleError {
     }
 }
 
-/// Request to connect to a console session (per PRD spec)
-#[derive(Debug, Serialize)]
-struct ConnectRequest {
-    vm: String,
-    token: String,
-    /// Terminal width in columns
-    cols: u16,
-    /// Terminal height in rows
-    rows: u16,
+/// URL encode a string
+fn url_encode(s: &str) -> String {
+    let mut encoded = String::new();
+    for c in s.chars() {
+        match c {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | '.' | '~' => encoded.push(c),
+            _ => {
+                for byte in c.to_string().as_bytes() {
+                    encoded.push_str(&format!("%{:02X}", byte));
+                }
+            }
+        }
+    }
+    encoded
 }
 
-/// Response from daemon after connect request
-#[derive(Debug, Deserialize)]
-struct ConnectResponse {
-    success: bool,
-    error: Option<String>,
-}
-
-/// Get the terminal server host from FCM_HOST env var or default
-fn terminal_host() -> String {
+/// Get the WebSocket URL base for console connections
+/// Uses FCM_HOST env var to determine the server
+fn get_websocket_url_base() -> String {
     if let Ok(host) = env::var("FCM_HOST") {
         // Extract hostname from FCM_HOST (remove scheme and port)
         let host = host
             .trim_start_matches("http://")
             .trim_start_matches("https://");
 
-        // Split off port if present
+        // For FCM_HOST, the fcm domain uses the IP with dashes
+        // e.g., FCM_HOST=64.34.93.45:7777 -> fcm.64-34-93-45.sslip.io
         let hostname = host.split(':').next().unwrap_or(host);
-        hostname.to_string()
+
+        // Replace dots with dashes for sslip.io format
+        let ip_dashed = hostname.replace('.', "-");
+        format!("wss://fcm.{}.sslip.io/console", ip_dashed)
     } else {
-        "127.0.0.1".to_string()
+        // Local development - use localhost without TLS
+        "ws://127.0.0.1:7778/console".to_string()
     }
 }
 
@@ -223,69 +227,63 @@ fn get_terminal_size() -> (u16, u16) {
     }
 }
 
-/// Connect to a console session on a VM
+/// Connect to a console session on a VM via WebSocket
 ///
 /// This function:
-/// 1. Connects to the daemon's terminal server
-/// 2. Authenticates with the provided token
-/// 3. Enters raw terminal mode
-/// 4. Proxies stdin/stdout to the TCP connection
-/// 5. Restores terminal on exit
+/// 1. Connects to the daemon via WebSocket over TLS (wss://)
+/// 2. Passes auth token in HTTP header during upgrade
+/// 3. Passes VM name, terminal size in URL query params
+/// 4. Enters raw terminal mode
+/// 5. Proxies stdin/stdout using WebSocket Binary frames
+/// 6. Restores terminal on exit
 pub fn connect(vm: &str) -> Result<(), ConsoleError> {
-    let host = terminal_host();
-    let addr = format!("{}:{}", host, DEFAULT_TERMINAL_PORT);
-
     // Simple output - just show VM name, hide technical details
     print!("Connecting to {}...", vm);
     io::stdout().flush()?;
 
-    // Connect to daemon terminal server
-    let mut stream = TcpStream::connect(&addr).map_err(|e| {
-        ConsoleError::ConnectionFailed(format!(
-            "Cannot connect to terminal server at {}: {}",
-            addr, e
-        ))
-    })?;
-
-    stream.set_nodelay(true)?;
-
-    // Load and send authentication with terminal size
+    // Load auth token
     let token = load_token()?;
     let (cols, rows) = get_terminal_size();
-    let request = ConnectRequest {
-        vm: vm.to_string(),
-        token,
+
+    // Gather environment variables to pass
+    let term = env::var("TERM").unwrap_or_else(|_| "xterm-256color".to_string());
+    let shell = env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+    let colorterm = env::var("COLORTERM").ok();
+    let lang = env::var("LANG").ok();
+
+    // Build WebSocket URL with query params
+    let base_url = get_websocket_url_base();
+    let mut url = format!(
+        "{}?vm={}&cols={}&rows={}&env=TERM={}&env=SHELL={}",
+        base_url,
+        url_encode(vm),
         cols,
         rows,
-    };
-
-    let request_json = serde_json::to_string(&request)
-        .map_err(|e| ConsoleError::AuthFailed(format!("Failed to serialize request: {}", e)))?;
-
-    // Send request with newline delimiter
-    stream.write_all(request_json.as_bytes())?;
-    stream.write_all(b"\n")?;
-    stream.flush()?;
-
-    // Read response
-    let mut response_buf = Vec::new();
-    let mut byte = [0u8; 1];
-    loop {
-        stream.read_exact(&mut byte)?;
-        if byte[0] == b'\n' {
-            break;
-        }
-        response_buf.push(byte[0]);
+        url_encode(&term),
+        url_encode(&shell)
+    );
+    if let Some(ct) = colorterm {
+        url.push_str(&format!("&env=COLORTERM={}", url_encode(&ct)));
+    }
+    if let Some(l) = lang {
+        url.push_str(&format!("&env=LANG={}", url_encode(&l)));
     }
 
-    let response: ConnectResponse = serde_json::from_slice(&response_buf)
-        .map_err(|e| ConsoleError::AuthFailed(format!("Invalid response from daemon: {}", e)))?;
+    // Build HTTP request with Authorization header
+    let request = tungstenite::http::Request::builder()
+        .uri(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .body(())
+        .map_err(|e| ConsoleError::ConnectionFailed(format!("Failed to build request: {}", e)))?;
 
-    if !response.success {
+    // Connect to WebSocket server (with TLS for wss://)
+    let (websocket, response) = tungstenite::connect(request)
+        .map_err(|e| ConsoleError::ConnectionFailed(format!("WebSocket connection failed: {}", e)))?;
+
+    // Check response status
+    if response.status() != 101 {
         println!(" failed");
-        return Err(ConsoleError::SessionError(
-            response.error.unwrap_or_else(|| "Unknown error".to_string()),
-        ));
+        return Err(ConsoleError::AuthFailed(format!("HTTP {}", response.status())));
     }
 
     // Simple connected message
@@ -308,49 +306,55 @@ pub fn connect(vm: &str) -> Result<(), ConsoleError> {
 
     // Set up flag for clean shutdown
     let running = Arc::new(AtomicBool::new(true));
-    let running_clone = running.clone();
+    let running_for_reader = Arc::clone(&running);
 
-    // Clone stream for the reader thread
-    let mut read_stream = stream.try_clone()?;
+    // Wrap websocket in Arc<Mutex> for thread-safe access
+    let ws = Arc::new(Mutex::new(websocket));
+    let ws_for_reader = Arc::clone(&ws);
 
-    // Spawn thread to read from socket and write to stdout
+    // Spawn thread to read from WebSocket and write to stdout
     let reader_handle = thread::spawn(move || {
         let mut stdout = io::stdout();
-        let mut buf = [0u8; 4096];
 
-        while running_clone.load(Ordering::Relaxed) {
-            // Set read timeout to allow checking the running flag
-            if read_stream
-                .set_read_timeout(Some(Duration::from_millis(100)))
-                .is_err()
-            {
-                break;
-            }
-
-            match read_stream.read(&mut buf) {
-                Ok(0) => {
-                    // Connection closed
-                    break;
+        while running_for_reader.load(Ordering::Relaxed) {
+            // Read from WebSocket
+            let msg = {
+                let mut ws = match ws_for_reader.lock() {
+                    Ok(ws) => ws,
+                    Err(_) => break,
+                };
+                match ws.read() {
+                    Ok(msg) => msg,
+                    Err(tungstenite::Error::Io(ref e)) if e.kind() == io::ErrorKind::WouldBlock => {
+                        continue;
+                    }
+                    Err(tungstenite::Error::Io(ref e)) if e.kind() == io::ErrorKind::TimedOut => {
+                        continue;
+                    }
+                    Err(_) => break,
                 }
-                Ok(n) => {
-                    if stdout.write_all(&buf[..n]).is_err() {
+            };
+
+            match msg {
+                Message::Binary(data) => {
+                    if stdout.write_all(&data).is_err() {
                         break;
                     }
                     if stdout.flush().is_err() {
                         break;
                     }
                 }
-                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-                    // Timeout, continue checking running flag
-                    continue;
-                }
-                Err(ref e) if e.kind() == io::ErrorKind::TimedOut => {
-                    // Timeout, continue checking running flag
-                    continue;
-                }
-                Err(_) => {
+                Message::Close(_) => {
                     break;
                 }
+                Message::Ping(data) => {
+                    let mut ws = match ws_for_reader.lock() {
+                        Ok(ws) => ws,
+                        Err(_) => break,
+                    };
+                    let _ = ws.send(Message::Pong(data));
+                }
+                _ => {}
             }
         }
     });
@@ -358,7 +362,7 @@ pub fn connect(vm: &str) -> Result<(), ConsoleError> {
     // Track last known terminal size
     let mut last_size = (cols, rows);
 
-    // Main thread reads from stdin and writes to socket
+    // Main thread reads from stdin and sends to WebSocket
     let mut stdin = io::stdin();
     let mut buf = [0u8; 1024];
 
@@ -368,12 +372,16 @@ pub fn connect(vm: &str) -> Result<(), ConsoleError> {
             let (new_cols, new_rows) = get_terminal_size();
             if (new_cols, new_rows) != last_size {
                 last_size = (new_cols, new_rows);
-                // Send resize message to daemon (which forwards to fcm-agent)
+                // Send resize message as Text frame
                 let resize_msg = make_resize_message(new_cols, new_rows);
-                if stream.write_all(resize_msg.as_bytes()).is_err() {
+                let mut ws = match ws.lock() {
+                    Ok(ws) => ws,
+                    Err(_) => break,
+                };
+                if ws.send(Message::Text(resize_msg)).is_err() {
                     break;
                 }
-                if stream.flush().is_err() {
+                if ws.flush().is_err() {
                     break;
                 }
             }
@@ -391,10 +399,15 @@ pub fn connect(vm: &str) -> Result<(), ConsoleError> {
                     break;
                 }
 
-                if stream.write_all(&buf[..n]).is_err() {
+                // Send as Binary frame
+                let mut ws_lock = match ws.lock() {
+                    Ok(ws) => ws,
+                    Err(_) => break,
+                };
+                if ws_lock.send(Message::Binary(buf[..n].to_vec())).is_err() {
                     break;
                 }
-                if stream.flush().is_err() {
+                if ws_lock.flush().is_err() {
                     break;
                 }
             }
@@ -410,6 +423,12 @@ pub fn connect(vm: &str) -> Result<(), ConsoleError> {
 
     // Signal reader thread to stop and wait for it
     running.store(false, Ordering::Relaxed);
+
+    // Close WebSocket connection
+    if let Ok(mut ws) = ws.lock() {
+        let _ = ws.close(None);
+    }
+
     let _ = reader_handle.join();
 
     // Terminal will be restored when _raw_terminal is dropped
@@ -423,22 +442,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_terminal_host_default() {
+    fn test_websocket_url_default() {
         env::remove_var("FCM_HOST");
-        assert_eq!(terminal_host(), "127.0.0.1");
+        let url = get_websocket_url_base();
+        assert_eq!(url, "ws://127.0.0.1:7778/console");
     }
 
     #[test]
-    fn test_terminal_host_from_env() {
+    fn test_websocket_url_from_env() {
         env::set_var("FCM_HOST", "192.168.1.100:7777");
-        assert_eq!(terminal_host(), "192.168.1.100");
+        let url = get_websocket_url_base();
+        assert!(url.contains("fcm.192-168-1-100.sslip.io"));
+        assert!(url.starts_with("wss://"));
         env::remove_var("FCM_HOST");
     }
 
     #[test]
-    fn test_terminal_host_with_scheme() {
+    fn test_websocket_url_with_scheme() {
         env::set_var("FCM_HOST", "http://10.0.0.5:7777");
-        assert_eq!(terminal_host(), "10.0.0.5");
+        let url = get_websocket_url_base();
+        assert!(url.contains("fcm.10-0-0-5.sslip.io"));
+        assert!(url.starts_with("wss://"));
         env::remove_var("FCM_HOST");
     }
 
@@ -449,36 +473,11 @@ mod tests {
     }
 
     #[test]
-    fn test_connect_request_serialization() {
-        let request = ConnectRequest {
-            vm: "test-vm".to_string(),
-            token: "secret-token".to_string(),
-            cols: 120,
-            rows: 40,
-        };
-        let json = serde_json::to_string(&request).unwrap();
-        assert!(json.contains("test-vm"));
-        assert!(json.contains("secret-token"));
-        assert!(json.contains("120"));
-        assert!(json.contains("40"));
-        // Session field should not be present
-        assert!(!json.contains("session"));
-    }
-
-    #[test]
-    fn test_connect_response_deserialization_success() {
-        let json = r#"{"success": true, "error": null}"#;
-        let response: ConnectResponse = serde_json::from_str(json).unwrap();
-        assert!(response.success);
-        assert!(response.error.is_none());
-    }
-
-    #[test]
-    fn test_connect_response_deserialization_error() {
-        let json = r#"{"success": false, "error": "Session not found"}"#;
-        let response: ConnectResponse = serde_json::from_str(json).unwrap();
-        assert!(!response.success);
-        assert_eq!(response.error.unwrap(), "Session not found");
+    fn test_url_encode() {
+        assert_eq!(url_encode("hello"), "hello");
+        assert_eq!(url_encode("hello world"), "hello%20world");
+        assert_eq!(url_encode("test=value"), "test%3Dvalue");
+        assert_eq!(url_encode("/bin/zsh"), "%2Fbin%2Fzsh");
     }
 
     #[test]
@@ -495,6 +494,9 @@ mod tests {
         assert!(ConsoleError::SessionError("not found".to_string())
             .to_string()
             .contains("not found"));
+        assert!(ConsoleError::WebSocket("protocol error".to_string())
+            .to_string()
+            .contains("protocol error"));
     }
 
     #[test]
@@ -508,9 +510,9 @@ mod tests {
     #[test]
     fn test_make_resize_message() {
         let msg = make_resize_message(120, 40);
-        assert_eq!(msg, r#"{"resize":{"cols":120,"rows":40}}"#);
+        assert_eq!(msg, r#"{"type":"resize","cols":120,"rows":40}"#);
 
         let msg2 = make_resize_message(80, 24);
-        assert_eq!(msg2, r#"{"resize":{"cols":80,"rows":24}}"#);
+        assert_eq!(msg2, r#"{"type":"resize","cols":80,"rows":24}"#);
     }
 }
