@@ -5,7 +5,7 @@ use crate::network;
 use crate::vm::{self, VmConfig, VmError, VmState, BASE_DIR};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::error::Error;
 use std::fs;
 use std::io::{Read, Write};
@@ -22,6 +22,9 @@ use tungstenite::protocol::Message;
 /// PTY master file descriptors for console access (VM ID -> master FD)
 type ConsoleFds = Arc<Mutex<HashMap<String, RawFd>>>;
 
+/// Ring buffer size for console output (64KB should hold several screens)
+const CONSOLE_BUFFER_SIZE: usize = 64 * 1024;
+
 /// Persistent console session - keeps SSH connection alive across WebSocket reconnects
 struct ConsoleSession {
     id: String,
@@ -33,6 +36,8 @@ struct ConsoleSession {
     input_tx: std::sync::mpsc::Sender<Vec<u8>>,
     /// Subscribers for SSH stdout (each connected WebSocket gets one)
     output_subscribers: Arc<Mutex<Vec<std::sync::mpsc::Sender<Vec<u8>>>>>,
+    /// Ring buffer of recent output for screen restoration on reconnect
+    output_buffer: Arc<Mutex<VecDeque<u8>>>,
     /// SSH process (kept alive for session duration)
     _ssh_child: std::process::Child,
 }
@@ -1515,7 +1520,7 @@ fn handle_terminal_connection(
     }
 
     // Get or create session
-    let (session_id, input_tx, output_subscribers) = if let Some(sid) = request.session {
+    let (session_id, input_tx, output_subscribers, output_buffer, is_reconnect) = if let Some(sid) = request.session {
         // Reconnect to existing session
         let sessions = CONSOLE_SESSIONS.lock().unwrap();
         if let Some(session) = sessions.get(&sid) {
@@ -1524,7 +1529,7 @@ fn handle_terminal_connection(
                 return;
             }
             eprintln!("Reconnecting to session {} for VM {}", sid, request.vm);
-            (sid.clone(), session.input_tx.clone(), Arc::clone(&session.output_subscribers))
+            (sid.clone(), session.input_tx.clone(), Arc::clone(&session.output_subscribers), Arc::clone(&session.output_buffer), true)
         } else {
             eprintln!("Session {} not found", sid);
             return;
@@ -1582,6 +1587,10 @@ fn handle_terminal_connection(
         let output_subscribers: Arc<Mutex<Vec<std::sync::mpsc::Sender<Vec<u8>>>>> =
             Arc::new(Mutex::new(Vec::new()));
 
+        // Create ring buffer for output (for screen restoration on reconnect)
+        let output_buffer: Arc<Mutex<VecDeque<u8>>> =
+            Arc::new(Mutex::new(VecDeque::with_capacity(CONSOLE_BUFFER_SIZE)));
+
         // Start SSH stdin writer thread
         let input_rx_for_writer = input_rx;
         let mut stdin_writer = stdin;
@@ -1595,8 +1604,9 @@ fn handle_terminal_connection(
             }
         });
 
-        // Start SSH stdout reader thread that broadcasts to subscribers
+        // Start SSH stdout reader thread that broadcasts to subscribers and buffers output
         let output_subs_for_reader = Arc::clone(&output_subscribers);
+        let output_buffer_for_reader = Arc::clone(&output_buffer);
         let mut stdout_reader = stdout;
         let session_id_for_reader = session_id.clone();
         thread::spawn(move || {
@@ -1607,8 +1617,20 @@ fn handle_terminal_connection(
                     Ok(0) => break,
                     Ok(n) => {
                         let data = buf[..n].to_vec();
-                        let subs = output_subs_for_reader.lock().unwrap();
+
+                        // Store in ring buffer for reconnection replay
+                        {
+                            let mut buffer = output_buffer_for_reader.lock().unwrap();
+                            for &byte in &data {
+                                if buffer.len() >= CONSOLE_BUFFER_SIZE {
+                                    buffer.pop_front();
+                                }
+                                buffer.push_back(byte);
+                            }
+                        }
+
                         // Send to all subscribers, remove dead ones
+                        let subs = output_subs_for_reader.lock().unwrap();
                         let mut to_remove = Vec::new();
                         for (i, tx) in subs.iter().enumerate() {
                             if tx.send(data.clone()).is_err() {
@@ -1646,16 +1668,17 @@ fn handle_terminal_connection(
                 .as_secs(),
             input_tx: input_tx.clone(),
             output_subscribers: Arc::clone(&output_subscribers),
+            output_buffer: Arc::clone(&output_buffer),
             _ssh_child: child,
         };
 
         CONSOLE_SESSIONS.lock().unwrap().insert(session_id.clone(), session);
-        (session_id, input_tx, output_subscribers)
+        (session_id, input_tx, output_subscribers, output_buffer, false)
     };
 
     // Attach WebSocket to session
     eprintln!("Attaching WebSocket to session {}", session_id);
-    proxy_websocket_session(websocket, &session_id, &config.name, input_tx, output_subscribers);
+    proxy_websocket_session(websocket, &session_id, &config.name, input_tx, output_subscribers, output_buffer, is_reconnect);
     eprintln!("WebSocket disconnected from session {}", session_id);
 }
 
@@ -1668,6 +1691,8 @@ fn proxy_websocket_session(
     vm_name: &str,
     input_tx: std::sync::mpsc::Sender<Vec<u8>>,
     output_subscribers: Arc<Mutex<Vec<std::sync::mpsc::Sender<Vec<u8>>>>>,
+    output_buffer: Arc<Mutex<VecDeque<u8>>>,
+    is_reconnect: bool,
 ) {
     use std::sync::mpsc;
 
@@ -1679,6 +1704,26 @@ fn proxy_websocket_session(
     let session_info = format!("{{\"session\":\"{}\"}}", session_id);
     let _ = websocket.send(Message::Text(session_info));
     let _ = websocket.flush();
+
+    // On reconnect, replay the output buffer to restore screen state
+    if is_reconnect {
+        let buffer = output_buffer.lock().unwrap();
+        if !buffer.is_empty() {
+            // Send clear screen first, then buffer contents
+            // Clear screen: ESC[2J (clear entire screen) + ESC[H (cursor home)
+            let clear_screen = b"\x1b[2J\x1b[H";
+            let _ = websocket.send(Message::Binary(clear_screen.to_vec()));
+
+            // Send buffered output
+            let data: Vec<u8> = buffer.iter().copied().collect();
+            let _ = websocket.send(Message::Binary(data));
+            let _ = websocket.flush();
+        }
+        drop(buffer);
+
+        // Send Ctrl+L to trigger TUI apps to redraw
+        let _ = input_tx.send(vec![0x0c]); // Ctrl+L = 0x0c
+    }
 
     // Create output channel for this WebSocket
     let (output_tx, output_rx) = mpsc::channel::<Vec<u8>>();
