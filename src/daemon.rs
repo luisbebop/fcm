@@ -1428,7 +1428,7 @@ fn proxy_agent_io(client_stream: TcpStream, agent_stream: TcpStream) {
     });
 
     // Main thread reads from client and writes to fcm-agent
-    // Client sends raw bytes, we encode to JSON
+    // Client sends raw bytes (encoded to stdin) or JSON resize messages (forwarded directly)
     let mut buf = [0u8; 4096];
     let mut client_read_stream = client_read;
 
@@ -1436,10 +1436,24 @@ fn proxy_agent_io(client_stream: TcpStream, agent_stream: TcpStream) {
         match client_read_stream.read(&mut buf) {
             Ok(0) => break, // EOF
             Ok(n) => {
-                // Encode as JSON stdin message
-                let msg = make_stdin_message(&buf[..n]);
-                if agent_write.write_all(msg.as_bytes()).is_err() {
-                    break;
+                let data = &buf[..n];
+
+                // Check if this is a resize message from client
+                // Resize messages start with {"resize": and are JSON
+                if data.starts_with(b"{\"resize\"") {
+                    // Forward resize message directly to agent (add newline if missing)
+                    if agent_write.write_all(data).is_err() {
+                        break;
+                    }
+                    if !data.ends_with(b"\n") && agent_write.write_all(b"\n").is_err() {
+                        break;
+                    }
+                } else {
+                    // Encode as JSON stdin message
+                    let msg = make_stdin_message(data);
+                    if agent_write.write_all(msg.as_bytes()).is_err() {
+                        break;
+                    }
                 }
                 if agent_write.flush().is_err() {
                     break;

@@ -19,6 +19,30 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+/// Global flag set by SIGWINCH signal handler when terminal is resized
+static RESIZE_PENDING: AtomicBool = AtomicBool::new(false);
+
+/// SIGWINCH signal handler - sets the resize pending flag
+extern "C" fn sigwinch_handler(_: libc::c_int) {
+    RESIZE_PENDING.store(true, Ordering::SeqCst);
+}
+
+/// Install SIGWINCH signal handler
+fn install_sigwinch_handler() {
+    unsafe {
+        let mut action: libc::sigaction = std::mem::zeroed();
+        action.sa_sigaction = sigwinch_handler as usize;
+        action.sa_flags = 0; // No SA_RESTART - we want EINTR so we can detect resize
+        libc::sigemptyset(&mut action.sa_mask);
+        libc::sigaction(libc::SIGWINCH, &action, std::ptr::null_mut());
+    }
+}
+
+/// Create a resize message in JSON format
+fn make_resize_message(cols: u16, rows: u16) -> String {
+    format!("{{\"resize\":{{\"cols\":{},\"rows\":{}}}}}", cols, rows)
+}
+
 /// Default daemon terminal port
 const DEFAULT_TERMINAL_PORT: u16 = 7778;
 
@@ -278,6 +302,10 @@ pub fn connect(vm: &str, session: &str) -> Result<(), ConsoleError> {
         ));
     }
 
+    // Install SIGWINCH handler to detect terminal resize
+    install_sigwinch_handler();
+    RESIZE_PENDING.store(false, Ordering::SeqCst);
+
     // Enter raw terminal mode
     let _raw_terminal = RawTerminal::enable()?;
 
@@ -330,11 +358,30 @@ pub fn connect(vm: &str, session: &str) -> Result<(), ConsoleError> {
         }
     });
 
+    // Track last known terminal size
+    let mut last_size = (cols, rows);
+
     // Main thread reads from stdin and writes to socket
     let mut stdin = io::stdin();
     let mut buf = [0u8; 1024];
 
     while running.load(Ordering::Relaxed) {
+        // Check if terminal was resized (SIGWINCH received)
+        if RESIZE_PENDING.swap(false, Ordering::SeqCst) {
+            let (new_cols, new_rows) = get_terminal_size();
+            if (new_cols, new_rows) != last_size {
+                last_size = (new_cols, new_rows);
+                // Send resize message to daemon (which forwards to fcm-agent)
+                let resize_msg = make_resize_message(new_cols, new_rows);
+                if stream.write_all(resize_msg.as_bytes()).is_err() {
+                    break;
+                }
+                if stream.flush().is_err() {
+                    break;
+                }
+            }
+        }
+
         match stdin.read(&mut buf) {
             Ok(0) => {
                 // EOF
@@ -355,6 +402,7 @@ pub fn connect(vm: &str, session: &str) -> Result<(), ConsoleError> {
                 }
             }
             Err(ref e) if e.kind() == io::ErrorKind::Interrupted => {
+                // Signal received (likely SIGWINCH), loop will check RESIZE_PENDING
                 continue;
             }
             Err(_) => {
@@ -458,5 +506,14 @@ mod tests {
         let token = load_token().unwrap();
         assert_eq!(token, "test_console_token");
         env::remove_var("FCM_TOKEN");
+    }
+
+    #[test]
+    fn test_make_resize_message() {
+        let msg = make_resize_message(120, 40);
+        assert_eq!(msg, r#"{"resize":{"cols":120,"rows":40}}"#);
+
+        let msg2 = make_resize_message(80, 24);
+        assert_eq!(msg2, r#"{"resize":{"cols":80,"rows":24}}"#);
     }
 }
