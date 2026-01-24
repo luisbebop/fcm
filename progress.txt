@@ -1921,5 +1921,21 @@
 - All 98 tests pass with zero clippy warnings (one less test due to removal)
 - Commit: 3ff0d7b
 
+### Task 107: Fix PATH Not Set for zsh Login Shells in VM
+- Fixed issue where `bun` and `claude` commands weren't found in VM console
+- Root cause: PATH was set in `/etc/profile`, but zsh doesn't source this file
+- zsh uses its own configuration files (`/etc/zsh/zprofile` for login shells)
+- rootfs/Dockerfile changes:
+  - Create `/etc/zsh` directory
+  - Create `/etc/zsh/zprofile` that sources `/etc/profile`
+  - Uses `emulate sh -c "source /etc/profile"` for proper POSIX compatibility
+- Rebuilt base-rootfs.img (855MB sparse)
+- Verified fix works:
+  - `zsh -lc 'which bun'` → `/usr/local/bin/bun`
+  - `zsh -lc 'which claude'` → `/usr/local/bin/claude`
+- Existing VMs need to be destroyed and recreated to get the new rootfs
+- All 98 tests pass with zero clippy warnings
+- Commit: 0090dd2
+
 ## Next Tasks
 - None currently - all PRD features complete
