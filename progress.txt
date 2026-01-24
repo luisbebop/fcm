@@ -2042,3 +2042,17 @@
 - Reader thread removes session from CONSOLE_SESSIONS when it detects EOF
 - No more stale sessions in `fcm console --ls` after user types `exit`
 - Commit: 13c9050
+
+### Task 114: Improve Console UX
+- Fixed `fcm console ls` to list sessions instead of connecting to VM named "ls"
+- Changed CLI to use "ls" as special VM name that triggers session listing
+- Removed `--ls` flag in favor of `fcm console ls` subcommand-style syntax
+- Session IDs now use nature-related words (e.g., "mist-brook" instead of "abc123")
+  - Added SESSION_WORDS constant with 42 nature words (brook, cloud, fern, etc.)
+  - generate_console_session_id() now returns two-word combinations
+- Help text now shows actual VM name in reconnect hint:
+  - Before: "reconnect with: fcm console <vm> -s session"
+  - After: "reconnect with: fcm console myvm -s session"
+- Updated `fcm console --help` with clearer examples
+- All 98 tests pass with zero clippy warnings
+- Commit: a495dda
