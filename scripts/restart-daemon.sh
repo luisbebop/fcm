@@ -23,17 +23,33 @@ cargo zigbuild --release --target x86_64-apple-darwin 2>&1 | grep -E "Compiling|
 
 echo "==> Cleaning old releases..."
 sudo rm -f /var/lib/firecracker/releases/fcm-*.tar.gz
-sudo rm -f /var/lib/firecracker/releases/fcm-macos
-sudo rm -f /var/lib/firecracker/releases/fcm-macos-arm64
-sudo rm -f /var/lib/firecracker/releases/fcm-macos-x64
+sudo rm -f /var/lib/firecracker/releases/fcm-macos*
 
-echo "==> Installing binaries..."
+echo "==> Creating release archives..."
+RELEASES_DIR=/var/lib/firecracker/releases
+TEMP_DIR=$(mktemp -d)
+
+# macOS ARM64 (Apple Silicon)
+cp target/aarch64-apple-darwin/release/fcm "$TEMP_DIR/fcm"
+chmod +x "$TEMP_DIR/fcm"
+tar -czf "$TEMP_DIR/fcm-macos-arm64.tar.gz" -C "$TEMP_DIR" fcm
+sudo mv "$TEMP_DIR/fcm-macos-arm64.tar.gz" "$RELEASES_DIR/"
+rm "$TEMP_DIR/fcm"
+
+# macOS x64 (Intel)
+cp target/x86_64-apple-darwin/release/fcm "$TEMP_DIR/fcm"
+chmod +x "$TEMP_DIR/fcm"
+tar -czf "$TEMP_DIR/fcm-macos-x64.tar.gz" -C "$TEMP_DIR" fcm
+sudo mv "$TEMP_DIR/fcm-macos-x64.tar.gz" "$RELEASES_DIR/"
+rm "$TEMP_DIR/fcm"
+
+rmdir "$TEMP_DIR"
+
+echo "==> Installing daemon binary..."
 sudo cp target/release/fcm /usr/local/bin/fcm
-sudo cp target/aarch64-apple-darwin/release/fcm /var/lib/firecracker/releases/fcm-macos-arm64
-sudo cp target/x86_64-apple-darwin/release/fcm /var/lib/firecracker/releases/fcm-macos-x64
 
-# Update COMMIT file with current version
-echo "$(git rev-parse --short HEAD) $(date '+%Y-%m-%d %H:%M %Z')" | sudo tee /var/lib/firecracker/releases/COMMIT > /dev/null
+# Update COMMIT file with current version (BRT timezone)
+echo "$(git rev-parse --short HEAD) $(TZ='America/Sao_Paulo' date '+%Y-%m-%d %H:%M BRT')" | sudo tee "$RELEASES_DIR/COMMIT" > /dev/null
 
 echo "==> Clearing logs..."
 sudo rm -f /tmp/fcm-daemon.log /tmp/fcm-daemon2.log
@@ -48,9 +64,9 @@ echo "==> Daemon status:"
 ps aux | grep 'fcm daemon' | grep -v grep || echo "Daemon not running!"
 
 echo ""
-echo "==> Binaries:"
-ls -lh /var/lib/firecracker/releases/fcm-macos-* 2>/dev/null
-cat /var/lib/firecracker/releases/COMMIT
+echo "==> Releases:"
+ls -lh "$RELEASES_DIR"/fcm-*.tar.gz 2>/dev/null
+cat "$RELEASES_DIR/COMMIT"
 
 echo ""
 echo "==> Recent logs:"
@@ -58,5 +74,5 @@ tail -15 /tmp/fcm-daemon.log 2>/dev/null || echo "(no logs yet)"
 
 echo ""
 echo "==> To download on Mac:"
-echo "  Apple Silicon: curl -o fcm https://fcm.64-34-93-45.sslip.io/releases/fcm-macos-arm64 && chmod +x fcm"
-echo "  Intel Mac:     curl -o fcm https://fcm.64-34-93-45.sslip.io/releases/fcm-macos-x64 && chmod +x fcm"
+echo "  Apple Silicon: curl -sL https://fcm.64-34-93-45.sslip.io/releases/fcm-macos-arm64.tar.gz | tar xz && sudo mv fcm /usr/local/bin/"
+echo "  Intel Mac:     curl -sL https://fcm.64-34-93-45.sslip.io/releases/fcm-macos-x64.tar.gz | tar xz && sudo mv fcm /usr/local/bin/"

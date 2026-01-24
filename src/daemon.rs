@@ -128,28 +128,27 @@ fn list_releases() -> Vec<Release> {
             .map(|m| m.len() as f64 / 1_048_576.0)
             .unwrap_or(0.0);
 
-        // New format: fcm-macos-arm64, fcm-macos-x64 (no extension, no commit in name)
-        if !filename.contains('.') {
-            let platform = filename.trim_start_matches("fcm-").to_string();
-            releases.push(Release {
-                commit: current_commit.clone(),
-                platform,
-                filename,
-                size_mb,
-            });
-            continue;
-        }
-
-        // Legacy format: fcm-<commit>-<platform>.tar.gz
+        // Current format: fcm-<platform>.tar.gz (e.g., fcm-macos-arm64.tar.gz)
         if filename.ends_with(".tar.gz") {
             let name_without_ext = filename.trim_end_matches(".tar.gz");
             let parts: Vec<&str> = name_without_ext.split('-').collect();
 
-            // Format: fcm-<commit>-<os>-<arch>
+            // New format: fcm-<os>-<arch> (3 parts)
+            if parts.len() == 3 {
+                let platform = format!("{}-{}", parts[1], parts[2]);
+                releases.push(Release {
+                    commit: current_commit.clone(),
+                    platform,
+                    filename,
+                    size_mb,
+                });
+                continue;
+            }
+
+            // Legacy format: fcm-<commit>-<os>-<arch> (4+ parts)
             if parts.len() >= 4 {
                 let commit = parts[1].to_string();
                 let platform = format!("{}-{}", parts[2], parts[3]);
-
                 releases.push(Release {
                     commit,
                     platform,
