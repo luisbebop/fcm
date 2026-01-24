@@ -10,7 +10,7 @@ use std::error::Error;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::os::unix::io::RawFd;
+use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -1014,6 +1014,7 @@ fn handle_start_vm(request: Request, vm_id: &str, access_level: &AccessLevel, co
     match vm::start_vm(vm_id) {
         Ok((config, master_fd)) => {
             // Store the PTY master FD for console access
+            eprintln!("Storing PTY FD {} for VM {} (id={})", master_fd, config.name, config.id);
             console_fds.lock().unwrap().insert(config.id.clone(), master_fd);
             let response = VmResponse::from(&config);
             send_json_response(request, 200, &response)
@@ -1276,13 +1277,6 @@ fn handle_request(
     }
 }
 
-/// Escape a string for use in shell variable assignment
-/// Uses single quotes and escapes embedded single quotes
-fn shell_escape(s: &str) -> String {
-    // Wrap in single quotes, escape any existing single quotes
-    format!("'{}'", s.replace('\'', "'\\''"))
-}
-
 /// WebSocket console request parsed from HTTP upgrade
 struct WsConsoleRequest {
     vm: String,
@@ -1319,11 +1313,11 @@ fn parse_ws_query_params(query: &str) -> (HashMap<String, String>, Vec<(String, 
 /// HTTP response type for WebSocket callback errors
 type WsErrorResponse = tungstenite::http::Response<Option<String>>;
 
-/// Handle a single terminal connection using WebSocket over PTY
+/// Handle a single terminal connection via WebSocket -> SSH
 fn handle_terminal_connection(
     stream: TcpStream,
     token: &str,
-    console_fds: &ConsoleFds,
+    _console_fds: &ConsoleFds,
 ) {
     // Use RefCell for interior mutability to share with closure
     use std::cell::RefCell;
@@ -1447,194 +1441,156 @@ fn handle_terminal_connection(
         return;
     }
 
-    // Get the PTY master FD for this VM
-    let master_fd = match console_fds.lock().unwrap().get(&config.id).copied() {
-        Some(fd) => fd,
-        None => {
-            eprintln!("Console not available for VM '{}' (VM may need restart)", request.vm);
+    // Get VM IP address
+    let vm_ip = config.ip.clone();
+    if vm_ip.is_empty() {
+        eprintln!("VM '{}' has no IP address", request.vm);
+        return;
+    }
+
+    eprintln!("Starting SSH session to VM {} at {}", request.vm, vm_ip);
+
+    // Build environment variables for SSH
+    let mut env_args = Vec::new();
+    for (key, value) in &request.env {
+        if key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !key.is_empty() {
+            env_args.push(format!("{}={}", key, value));
+        }
+    }
+
+    // Spawn SSH to VM with PTY allocation
+    // Use sshpass with password "root" (VMs are configured this way)
+    let mut ssh_cmd = std::process::Command::new("sshpass");
+    ssh_cmd
+        .arg("-p").arg("root")
+        .arg("ssh")
+        .arg("-tt") // Force PTY allocation
+        .arg("-o").arg("StrictHostKeyChecking=no")
+        .arg("-o").arg("UserKnownHostsFile=/dev/null")
+        .arg("-o").arg("LogLevel=ERROR")
+        .arg(format!("root@{}", vm_ip));
+
+    // Add environment setup and shell command
+    let shell_cmd = if env_args.is_empty() {
+        "exec zsh".to_string()
+    } else {
+        format!("export {}; exec zsh", env_args.join(" "))
+    };
+    ssh_cmd.arg(shell_cmd);
+
+    // Set up pipes for stdin/stdout
+    ssh_cmd.stdin(std::process::Stdio::piped());
+    ssh_cmd.stdout(std::process::Stdio::piped());
+    ssh_cmd.stderr(std::process::Stdio::piped());
+
+    let mut child = match ssh_cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Failed to spawn SSH: {}", e);
             return;
         }
     };
 
-    // Set initial terminal size
-    set_pty_window_size(master_fd, request.cols, request.rows);
+    let stdin = child.stdin.take().unwrap();
+    let stdout = child.stdout.take().unwrap();
 
-    // Set environment variables in VM shell (write export commands to PTY)
-    // This happens before the proxy starts, so the shell receives these on connect
-    for (key, value) in &request.env {
-        // Only export safe variable names (alphanumeric and underscore)
-        if key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !key.is_empty() {
-            let export_cmd = format!("export {}={}\n", key, shell_escape(value));
-            unsafe {
-                libc::write(
-                    master_fd,
-                    export_cmd.as_ptr() as *const libc::c_void,
-                    export_cmd.len(),
-                );
-            }
-        }
-    }
+    // Proxy WebSocket to SSH
+    eprintln!("Starting WebSocket-SSH proxy for VM {}", request.vm);
+    proxy_websocket_ssh(websocket, stdin, stdout, &config.name, request.cols, request.rows);
 
-    // Proxy WebSocket messages to/from PTY
-    proxy_websocket_pty(websocket, master_fd, &config.name);
+    // Kill SSH process when done
+    let _ = child.kill();
+    let _ = child.wait();
+    eprintln!("WebSocket-SSH proxy ended");
 }
 
 
-/// Set the PTY window size using ioctl
-fn set_pty_window_size(master_fd: RawFd, cols: u16, rows: u16) {
-    #[repr(C)]
-    struct Winsize {
-        ws_row: libc::c_ushort,
-        ws_col: libc::c_ushort,
-        ws_xpixel: libc::c_ushort,
-        ws_ypixel: libc::c_ushort,
-    }
-
-    let winsize = Winsize {
-        ws_row: rows,
-        ws_col: cols,
-        ws_xpixel: 0,
-        ws_ypixel: 0,
-    };
-
-    unsafe {
-        libc::ioctl(master_fd, libc::TIOCSWINSZ, &winsize);
-    }
-}
-
-/// Parse a resize message like {"type":"resize","cols":120,"rows":40}
-fn parse_resize_message(msg: &str) -> Option<(u16, u16)> {
-    // Simple parsing - find cols and rows values
-    let msg = msg.trim();
-    let cols_start = msg.find("\"cols\":")?;
-    let cols_str = &msg[cols_start + 7..];
-    let cols_end = cols_str.find(|c: char| !c.is_ascii_digit())?;
-    let cols: u16 = cols_str[..cols_end].parse().ok()?;
-
-    let rows_start = msg.find("\"rows\":")?;
-    let rows_str = &msg[rows_start + 7..];
-    let rows_end = rows_str.find(|c: char| !c.is_ascii_digit()).unwrap_or(rows_str.len());
-    let rows: u16 = rows_str[..rows_end].parse().ok()?;
-
-    Some((cols, rows))
-}
-
-/// Proxy WebSocket messages to/from PTY master
-fn proxy_websocket_pty(
-    websocket: tungstenite::WebSocket<TcpStream>,
-    master_fd: RawFd,
+/// Proxy WebSocket messages to/from SSH process
+/// Simple approach: just pipe stdin/stdout between WebSocket and SSH
+fn proxy_websocket_ssh(
+    mut websocket: tungstenite::WebSocket<TcpStream>,
+    mut ssh_stdin: std::process::ChildStdin,
+    ssh_stdout: std::process::ChildStdout,
     vm_name: &str,
+    _cols: u16,
+    _rows: u16,
 ) {
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::io::{Read, Write};
+    use std::sync::mpsc;
 
-    // Send initial OSC title sequence
-    let initial_title = format!("\x1b]0;{}: zsh\x07", vm_name);
-    let mut ws = websocket;
-    if ws.send(Message::Binary(initial_title.into_bytes())).is_err() {
-        return;
-    }
+    // Send initial OSC title
+    let title = format!("\x1b]0;fcm: {}\x07", vm_name);
+    let _ = websocket.send(Message::Binary(title.into_bytes()));
+    let _ = websocket.flush();
 
-    // Set websocket to non-blocking mode for the reader thread
-    // We need to split read/write, so use Arc<Mutex>
-    let ws_for_write = Arc::new(Mutex::new(ws));
-    let ws_for_read = Arc::clone(&ws_for_write);
-    let running = Arc::new(AtomicBool::new(true));
-    let running_for_reader = Arc::clone(&running);
+    // Channel for stdout reader to send data
+    let (tx, rx) = mpsc::channel::<Vec<u8>>();
 
-    // Thread to read from PTY and send as Binary WebSocket frames
-    let pty_reader_handle = thread::spawn(move || {
+    // Spawn thread to read from SSH stdout
+    let mut stdout = ssh_stdout;
+    let reader_handle = thread::spawn(move || {
         let mut buf = [0u8; 4096];
-        while running_for_reader.load(Ordering::Relaxed) {
-            // Use select/poll with timeout to allow checking running flag
-            let mut poll_fds = [libc::pollfd {
-                fd: master_fd,
-                events: libc::POLLIN,
-                revents: 0,
-            }];
-
-            let poll_result = unsafe {
-                libc::poll(poll_fds.as_mut_ptr(), 1, 100) // 100ms timeout
-            };
-
-            if poll_result < 0 {
-                break; // Error
-            }
-            if poll_result == 0 {
-                continue; // Timeout, check running flag
-            }
-
-            // Data available to read
-            let n = unsafe { libc::read(master_fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
-            if n <= 0 {
-                break; // EOF or error
-            }
-
-            // Send as binary WebSocket frame
-            let data = buf[..n as usize].to_vec();
-            let mut ws = match ws_for_read.lock() {
-                Ok(ws) => ws,
+        loop {
+            match stdout.read(&mut buf) {
+                Ok(0) => break, // EOF
+                Ok(n) => {
+                    if tx.send(buf[..n].to_vec()).is_err() {
+                        break;
+                    }
+                }
                 Err(_) => break,
-            };
-            if ws.send(Message::Binary(data)).is_err() {
-                break;
-            }
-            if ws.flush().is_err() {
-                break;
             }
         }
     });
 
-    // Main thread reads WebSocket messages and writes to PTY
-    loop {
-        let msg = {
-            let mut ws = match ws_for_write.lock() {
-                Ok(ws) => ws,
-                Err(_) => break,
-            };
-            match ws.read() {
-                Ok(msg) => msg,
-                Err(_) => break,
-            }
-        };
+    // Set WebSocket to non-blocking for polling
+    let ws_fd = websocket.get_ref().as_raw_fd();
+    unsafe {
+        let flags = libc::fcntl(ws_fd, libc::F_GETFL);
+        libc::fcntl(ws_fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+    }
 
-        match msg {
-            Message::Binary(data) => {
-                // Write raw bytes to PTY
-                let written = unsafe {
-                    libc::write(master_fd, data.as_ptr() as *const libc::c_void, data.len())
-                };
-                if written <= 0 {
+    // Main loop: check for data from both WebSocket and SSH stdout
+    loop {
+        // Check for data from SSH stdout (via channel)
+        match rx.try_recv() {
+            Ok(data) => {
+                if websocket.send(Message::Binary(data)).is_err() {
                     break;
                 }
+                let _ = websocket.flush();
             }
-            Message::Text(text) => {
-                // Text frames are control messages (resize)
-                if let Some((cols, rows)) = parse_resize_message(&text) {
-                    set_pty_window_size(master_fd, cols, rows);
+            Err(mpsc::TryRecvError::Disconnected) => break,
+            Err(mpsc::TryRecvError::Empty) => {}
+        }
+
+        // Check for data from WebSocket
+        match websocket.read() {
+            Ok(Message::Binary(data)) => {
+                if ssh_stdin.write_all(&data).is_err() {
+                    break;
                 }
+                let _ = ssh_stdin.flush();
             }
-            Message::Close(_) => {
-                break;
+            Ok(Message::Text(_text)) => {
+                // Resize messages ignored - SSH handles terminal size via PTY
             }
-            Message::Ping(data) => {
-                let mut ws = match ws_for_write.lock() {
-                    Ok(ws) => ws,
-                    Err(_) => break,
-                };
-                let _ = ws.send(Message::Pong(data));
+            Ok(Message::Close(_)) => break,
+            Ok(Message::Ping(data)) => {
+                let _ = websocket.send(Message::Pong(data));
             }
-            Message::Pong(_) => {
-                // Ignore pong
+            Ok(_) => {}
+            Err(tungstenite::Error::Io(ref e)) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                // No data available, brief sleep to avoid busy-loop
+                thread::sleep(std::time::Duration::from_millis(5));
             }
-            Message::Frame(_) => {
-                // Raw frame, ignore
-            }
+            Err(_) => break,
         }
     }
 
-    // Signal reader thread to stop and wait for it
-    running.store(false, Ordering::Relaxed);
-    let _ = pty_reader_handle.join();
+    // Clean up
+    drop(ssh_stdin);
+    let _ = reader_handle.join();
 }
 
 /// Parse HTTP request and extract method, path, headers

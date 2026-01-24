@@ -9,12 +9,13 @@
 use std::env;
 use std::error::Error;
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
 use tungstenite::protocol::Message;
 
 /// Global flag set by SIGWINCH signal handler when terminal is resized
@@ -463,13 +464,27 @@ pub fn connect(vm: &str) -> Result<(), ConsoleError> {
         .insert("Authorization", format!("Bearer {}", token).parse().unwrap());
 
     // Connect to WebSocket server (with TLS for wss://)
-    let (websocket, response) = tungstenite::connect(request)
+    let (mut websocket, response) = tungstenite::connect(request)
         .map_err(|e| ConsoleError::ConnectionFailed(format!("WebSocket connection failed: {}", e)))?;
 
     // Check response status
     if response.status() != 101 {
         println!(" failed");
         return Err(ConsoleError::AuthFailed(format!("HTTP {}", response.status())));
+    }
+
+    // Set a read timeout on the underlying stream to prevent blocking forever
+    // This allows the WebSocket thread to periodically check for outgoing data
+    use tungstenite::stream::MaybeTlsStream;
+    match websocket.get_mut() {
+        MaybeTlsStream::Rustls(tls_stream) => {
+            let _ = tls_stream.get_ref().set_read_timeout(Some(Duration::from_millis(50)));
+        }
+        MaybeTlsStream::Plain(tcp_stream) => {
+            let _ = tcp_stream.set_read_timeout(Some(Duration::from_millis(50)));
+        }
+        #[allow(unreachable_patterns)]
+        _ => {}
     }
 
     // Simple connected message
@@ -490,135 +505,159 @@ pub fn connect(vm: &str) -> Result<(), ConsoleError> {
     // Enter raw terminal mode
     let _raw_terminal = RawTerminal::enable()?;
 
-    // Set up flag for clean shutdown
+    // Use channels to communicate between threads
+    // This avoids mutex contention entirely
+    use std::sync::mpsc;
+
+    // Channel for stdin -> websocket writer thread
+    let (stdin_tx, stdin_rx) = mpsc::channel::<Vec<u8>>();
+    // Channel for websocket reader -> stdout
+    let (ws_tx, ws_rx) = mpsc::channel::<Vec<u8>>();
+    // Channel for control messages (resize, close)
+    let (ctrl_tx, ctrl_rx) = mpsc::channel::<String>();
+
     let running = Arc::new(AtomicBool::new(true));
-    let running_for_reader = Arc::clone(&running);
+    let running_for_ws = Arc::clone(&running);
 
-    // Wrap websocket in Arc<Mutex> for thread-safe access
-    let ws = Arc::new(Mutex::new(websocket));
-    let ws_for_reader = Arc::clone(&ws);
-
-    // Spawn thread to read from WebSocket and write to stdout
-    let reader_handle = thread::spawn(move || {
-        let mut stdout = io::stdout();
+    // WebSocket thread: owns the websocket, handles both read and write
+    let ws_handle = thread::spawn(move || {
+        let mut ws = websocket;
         let mut osc_state = OscState::Normal;
 
-        while running_for_reader.load(Ordering::Relaxed) {
-            // Read from WebSocket
-            let msg = {
-                let mut ws = match ws_for_reader.lock() {
-                    Ok(ws) => ws,
-                    Err(_) => break,
-                };
-                match ws.read() {
-                    Ok(msg) => msg,
-                    Err(tungstenite::Error::Io(ref e)) if e.kind() == io::ErrorKind::WouldBlock => {
-                        continue;
+        while running_for_ws.load(Ordering::Relaxed) {
+            // Check for data to send (non-blocking)
+            match stdin_rx.try_recv() {
+                Ok(data) => {
+                    if ws.send(Message::Binary(data)).is_err() {
+                        break;
                     }
-                    Err(tungstenite::Error::Io(ref e)) if e.kind() == io::ErrorKind::TimedOut => {
-                        continue;
-                    }
-                    Err(_) => break,
+                    let _ = ws.flush();
                 }
-            };
+                Err(mpsc::TryRecvError::Disconnected) => break,
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
 
-            match msg {
-                Message::Binary(data) => {
-                    // Process OSC title sequences and add "fcm: " prefix
+            // Check for control messages (resize)
+            match ctrl_rx.try_recv() {
+                Ok(msg) => {
+                    if ws.send(Message::Text(msg)).is_err() {
+                        break;
+                    }
+                    let _ = ws.flush();
+                }
+                Err(mpsc::TryRecvError::Disconnected) => break,
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+
+            // Try to read from WebSocket (this will block briefly)
+            // We can't easily make this non-blocking with TLS, so we accept some latency
+            match ws.read() {
+                Ok(Message::Binary(data)) => {
                     let processed = process_osc_titles(&data, &mut osc_state);
-                    if stdout.write_all(&processed).is_err() {
-                        break;
-                    }
-                    if stdout.flush().is_err() {
+                    if ws_tx.send(processed).is_err() {
                         break;
                     }
                 }
-                Message::Close(_) => {
-                    break;
-                }
-                Message::Ping(data) => {
-                    let mut ws = match ws_for_reader.lock() {
-                        Ok(ws) => ws,
-                        Err(_) => break,
-                    };
+                Ok(Message::Ping(data)) => {
                     let _ = ws.send(Message::Pong(data));
                 }
-                _ => {}
+                Ok(Message::Close(_)) => break,
+                Ok(_) => {}
+                Err(tungstenite::Error::Io(ref e)) if e.kind() == io::ErrorKind::WouldBlock => {}
+                Err(tungstenite::Error::Io(ref e)) if e.kind() == io::ErrorKind::TimedOut => {}
+                Err(_) => break,
+            }
+        }
+
+        let _ = ws.close(None);
+    });
+
+    // Stdout writer thread: receives from ws_rx and writes to stdout
+    let running_for_stdout = Arc::clone(&running);
+    let stdout_handle = thread::spawn(move || {
+        let mut stdout = io::stdout();
+        while running_for_stdout.load(Ordering::Relaxed) {
+            match ws_rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(data) => {
+                    let _ = stdout.write_all(&data);
+                    let _ = stdout.flush();
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
         }
     });
 
-    // Track last known terminal size
+    // Main thread: reads from stdin and sends via channel
+    let stdin_fd = io::stdin().as_raw_fd();
+    let mut buf = [0u8; 1024];
     let mut last_size = (cols, rows);
 
-    // Main thread reads from stdin and sends to WebSocket
-    let mut stdin = io::stdin();
-    let mut buf = [0u8; 1024];
-
     while running.load(Ordering::Relaxed) {
-        // Check if terminal was resized (SIGWINCH received)
+        // Check if terminal was resized
         if RESIZE_PENDING.swap(false, Ordering::SeqCst) {
             let (new_cols, new_rows) = get_terminal_size();
             if (new_cols, new_rows) != last_size {
                 last_size = (new_cols, new_rows);
-                // Send resize message as Text frame
                 let resize_msg = make_resize_message(new_cols, new_rows);
-                let mut ws = match ws.lock() {
-                    Ok(ws) => ws,
-                    Err(_) => break,
-                };
-                if ws.send(Message::Text(resize_msg)).is_err() {
-                    break;
-                }
-                if ws.flush().is_err() {
+                if ctrl_tx.send(resize_msg).is_err() {
                     break;
                 }
             }
         }
 
-        match stdin.read(&mut buf) {
-            Ok(0) => {
-                // EOF
-                break;
-            }
-            Ok(n) => {
-                // Check for Ctrl+] (0x1d) to disconnect
-                if buf[..n].contains(&0x1d) {
-                    println!("\r\nDisconnecting...\r");
-                    break;
-                }
+        // Poll stdin with short timeout
+        let mut poll_fd = libc::pollfd {
+            fd: stdin_fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let poll_result = unsafe { libc::poll(&mut poll_fd, 1, 10) };
 
-                // Send as Binary frame
-                let mut ws_lock = match ws.lock() {
-                    Ok(ws) => ws,
-                    Err(_) => break,
-                };
-                if ws_lock.send(Message::Binary(buf[..n].to_vec())).is_err() {
-                    break;
-                }
-                if ws_lock.flush().is_err() {
-                    break;
-                }
-            }
-            Err(ref e) if e.kind() == io::ErrorKind::Interrupted => {
-                // Signal received (likely SIGWINCH), loop will check RESIZE_PENDING
+        if poll_result < 0 {
+            let errno = io::Error::last_os_error();
+            if errno.kind() == io::ErrorKind::Interrupted {
                 continue;
             }
-            Err(_) => {
+            break;
+        }
+
+        if poll_result == 0 {
+            continue;
+        }
+
+        if poll_fd.revents & libc::POLLIN != 0 {
+            let n = unsafe {
+                libc::read(stdin_fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len())
+            };
+            if n <= 0 {
+                break;
+            }
+            let n = n as usize;
+
+            // Check for Ctrl+]
+            if buf[..n].contains(&0x1d) {
+                println!("\r\nDisconnecting...\r");
+                break;
+            }
+
+            // Send to websocket thread
+            if stdin_tx.send(buf[..n].to_vec()).is_err() {
                 break;
             }
         }
+
+        if poll_fd.revents & (libc::POLLERR | libc::POLLHUP) != 0 {
+            break;
+        }
     }
 
-    // Signal reader thread to stop and wait for it
+    // Clean shutdown
     running.store(false, Ordering::Relaxed);
-
-    // Close WebSocket connection
-    if let Ok(mut ws) = ws.lock() {
-        let _ = ws.close(None);
-    }
-
-    let _ = reader_handle.join();
+    drop(stdin_tx);
+    drop(ctrl_tx);
+    let _ = ws_handle.join();
+    let _ = stdout_handle.join();
 
     // Terminal will be restored when _raw_terminal is dropped
     println!("\r");
