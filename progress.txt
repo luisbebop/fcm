@@ -1833,5 +1833,20 @@
 - All 101 tests pass with zero clippy warnings
 - Commits: 4e3247d, 1dc7fae (always upload terminfo)
 
+### Task 102: Switch to rustls for Cross-Compilation
+- Fixed macOS ARM64 cross-compilation failing with native-tls
+- Root cause: native-tls links to macOS CoreFoundation/Security frameworks
+- Cannot cross-compile from Linux due to missing system libraries
+- Solution: Switch to rustls (pure Rust TLS implementation)
+- Cargo.toml changes:
+  - Changed `tungstenite = { features = ["native-tls"] }` to `features = ["rustls-tls-webpki-roots"]`
+  - Removed `native-tls = "0.2"` dependency
+- Benefits:
+  - Pure Rust implementation - no system dependencies
+  - Works with cargo-zigbuild for cross-compilation
+  - macOS ARM64 binary now builds successfully on Linux
+- All 101 tests pass with zero clippy warnings
+- Commit: aaf273b
+
 ## Next Tasks
-- None currently - OSC title prefix and terminfo upload complete
+- None currently - all PRD features complete
