@@ -1341,6 +1341,9 @@ fn proxy_agent_io(client_stream: TcpStream, agent_stream: TcpStream, cols: u16, 
         }
     });
 
+    // Small delay to ensure reader thread is running before we trigger prompt
+    thread::sleep(std::time::Duration::from_millis(50));
+
     // Send resize AFTER reader thread is spawned (so it's ready to receive prompt output)
     // This triggers the shell prompt on reconnect via fcm-agent
     let resize_msg = format!("{{\"resize\":{{\"cols\":{},\"rows\":{}}}}}\n", cols, rows);
