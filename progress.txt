@@ -1983,5 +1983,17 @@
 - All 98 tests pass with zero clippy warnings
 - Commit: a8ddade
 
+### Task 111: Add Linux Binary to Releases
+- Added Linux x64 binary to the release archives
+- scripts/restart-daemon.sh:
+  - Create fcm-linux-x64.tar.gz from target/release/fcm
+- src/daemon.rs:
+  - Added "linux-x64" => "Linux" platform display name
+- Status page now shows three downloads:
+  - Linux (fcm-linux-x64.tar.gz)
+  - macOS (Apple Silicon) (fcm-macos-arm64.tar.gz)
+  - macOS (Intel) (fcm-macos-x64.tar.gz)
+- Commit: a17c886
+
 ## Next Tasks
 - None currently - all PRD features complete
