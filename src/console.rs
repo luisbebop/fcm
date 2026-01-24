@@ -20,6 +20,112 @@ use tungstenite::protocol::Message;
 /// Global flag set by SIGWINCH signal handler when terminal is resized
 static RESIZE_PENDING: AtomicBool = AtomicBool::new(false);
 
+/// OSC sequence state machine for parsing terminal title sequences
+/// Detects: \x1b]0;{title}\x07 or \x1b]0;{title}\x1b\\
+#[derive(Debug, Clone)]
+enum OscState {
+    /// Normal output, no OSC sequence in progress
+    Normal,
+    /// Saw ESC (\x1b), waiting for ]
+    Escape,
+    /// Saw ESC ], waiting for 0
+    OscStart,
+    /// Saw ESC ]0, waiting for ;
+    OscZero,
+    /// Collecting title text after ESC ]0;
+    CollectingTitle(Vec<u8>),
+    /// Saw ESC inside title (possible ST terminator \x1b\\)
+    TitleEscape(Vec<u8>),
+}
+
+/// Process binary data and rewrite OSC title sequences with "fcm: " prefix
+/// Returns the processed data to write to stdout
+fn process_osc_titles(data: &[u8], state: &mut OscState) -> Vec<u8> {
+    let mut output = Vec::with_capacity(data.len() + 32);
+
+    for &byte in data {
+        match state {
+            OscState::Normal => {
+                if byte == 0x1b {
+                    // ESC - might be start of OSC sequence
+                    *state = OscState::Escape;
+                } else {
+                    output.push(byte);
+                }
+            }
+            OscState::Escape => {
+                if byte == b']' {
+                    // ESC ] - OSC sequence start
+                    *state = OscState::OscStart;
+                } else {
+                    // Not an OSC, emit ESC and this byte
+                    output.push(0x1b);
+                    output.push(byte);
+                    *state = OscState::Normal;
+                }
+            }
+            OscState::OscStart => {
+                if byte == b'0' || byte == b'2' {
+                    // ESC ]0 or ESC ]2 - window title
+                    *state = OscState::OscZero;
+                } else {
+                    // Different OSC code, pass through
+                    output.extend_from_slice(&[0x1b, b']', byte]);
+                    *state = OscState::Normal;
+                }
+            }
+            OscState::OscZero => {
+                if byte == b';' {
+                    // ESC ]0; - now collecting title
+                    *state = OscState::CollectingTitle(Vec::new());
+                } else {
+                    // Malformed, pass through
+                    output.extend_from_slice(&[0x1b, b']', b'0', byte]);
+                    *state = OscState::Normal;
+                }
+            }
+            OscState::CollectingTitle(ref mut title) => {
+                if byte == 0x07 {
+                    // BEL - end of title (ST)
+                    emit_prefixed_title(&mut output, title);
+                    *state = OscState::Normal;
+                } else if byte == 0x1b {
+                    // ESC - might be ST (\x1b\\)
+                    *state = OscState::TitleEscape(std::mem::take(title));
+                } else {
+                    title.push(byte);
+                }
+            }
+            OscState::TitleEscape(ref mut title) => {
+                if byte == b'\\' {
+                    // \x1b\\ - String Terminator
+                    emit_prefixed_title(&mut output, title);
+                    *state = OscState::Normal;
+                } else {
+                    // Not ST, the ESC was part of title (unusual but handle it)
+                    title.push(0x1b);
+                    title.push(byte);
+                    *state = OscState::CollectingTitle(std::mem::take(title));
+                }
+            }
+        }
+    }
+
+    output
+}
+
+/// Emit an OSC title sequence with "fcm: " prefix
+fn emit_prefixed_title(output: &mut Vec<u8>, title: &[u8]) {
+    // Build: \x1b]0;fcm: {title}\x07
+    output.push(0x1b);
+    output.push(b']');
+    output.push(b'0');
+    output.push(b';');
+    output.extend_from_slice(b"fcm: ");
+    output.extend_from_slice(title);
+    output.push(0x07);
+}
+
 /// SIGWINCH signal handler - sets the resize pending flag
 extern "C" fn sigwinch_handler(_: libc::c_int) {
     RESIZE_PENDING.store(true, Ordering::SeqCst);
@@ -152,6 +258,79 @@ fn load_token() -> Result<String, ConsoleError> {
     ))
 }
 
+/// Get the HTTP API base URL for file uploads
+fn get_api_url_base() -> String {
+    if let Ok(host) = env::var("FCM_HOST") {
+        // Extract hostname from FCM_HOST (remove scheme and port)
+        let host = host
+            .trim_start_matches("http://")
+            .trim_start_matches("https://");
+        let hostname = host.split(':').next().unwrap_or(host);
+
+        // Replace dots with dashes for sslip.io format
+        let ip_dashed = hostname.replace('.', "-");
+        format!("https://fcm.{}.sslip.io", ip_dashed)
+    } else {
+        // Local development
+        "http://127.0.0.1:7777".to_string()
+    }
+}
+
+/// Upload terminfo file to VM (optional, improves terminal compatibility)
+///
+/// Reads local terminfo for the given TERM type and uploads it to the VM.
+/// This ensures the VM has proper terminfo for the client's terminal.
+pub fn upload_terminfo(vm: &str, term: &str) -> Result<(), ConsoleError> {
+    let token = load_token()?;
+
+    // Find local terminfo file
+    // Common paths: /usr/share/terminfo/{first-char}/{term}
+    //              /lib/terminfo/{first-char}/{term}
+    let first_char = term.chars().next().unwrap_or('x');
+    let terminfo_paths = [
+        format!("/usr/share/terminfo/{}/{}", first_char, term),
+        format!("/lib/terminfo/{}/{}", first_char, term),
+        format!("/usr/lib/terminfo/{}/{}", first_char, term),
+    ];
+
+    let terminfo_data = terminfo_paths
+        .iter()
+        .find_map(|path| fs::read(path).ok())
+        .ok_or_else(|| {
+            ConsoleError::TerminalError(format!(
+                "Cannot find terminfo for '{}' in standard paths",
+                term
+            ))
+        })?;
+
+    // Upload to VM
+    let api_base = get_api_url_base();
+    let dest_path = format!("/usr/share/terminfo/{}/{}", first_char, term);
+    let url = format!(
+        "{}/vms/{}/fs?path={}",
+        api_base,
+        url_encode(vm),
+        url_encode(&dest_path)
+    );
+
+    let response = ureq::put(&url)
+        .set("Authorization", &format!("Bearer {}", token))
+        .set("Content-Type", "application/octet-stream")
+        .send_bytes(&terminfo_data);
+
+    match response {
+        Ok(resp) if resp.status() == 200 => Ok(()),
+        Ok(resp) => Err(ConsoleError::ConnectionFailed(format!(
+            "Failed to upload terminfo: HTTP {}",
+            resp.status()
+        ))),
+        Err(e) => Err(ConsoleError::ConnectionFailed(format!(
+            "Failed to upload terminfo: {}",
+            e
+        ))),
+    }
+}
+
 /// Terminal settings wrapper for raw mode
 struct RawTerminal {
     original_termios: libc::termios,
@@ -251,6 +430,12 @@ pub fn connect(vm: &str) -> Result<(), ConsoleError> {
     let colorterm = env::var("COLORTERM").ok();
     let lang = env::var("LANG").ok();
 
+    // Optional: Upload terminfo to VM for better terminal compatibility
+    // This is best-effort - if it fails, we continue anyway
+    if env::var("FCM_UPLOAD_TERMINFO").map(|v| v == "1").unwrap_or(false) {
+        let _ = upload_terminfo(vm, &term);
+    }
+
     // Build WebSocket URL with query params
     let base_url = get_websocket_url_base();
     let mut url = format!(
@@ -315,6 +500,7 @@ pub fn connect(vm: &str) -> Result<(), ConsoleError> {
     // Spawn thread to read from WebSocket and write to stdout
     let reader_handle = thread::spawn(move || {
         let mut stdout = io::stdout();
+        let mut osc_state = OscState::Normal;
 
         while running_for_reader.load(Ordering::Relaxed) {
             // Read from WebSocket
@@ -337,7 +523,9 @@ pub fn connect(vm: &str) -> Result<(), ConsoleError> {
 
             match msg {
                 Message::Binary(data) => {
-                    if stdout.write_all(&data).is_err() {
+                    // Process OSC title sequences and add "fcm: " prefix
+                    let processed = process_osc_titles(&data, &mut osc_state);
+                    if stdout.write_all(&processed).is_err() {
                         break;
                     }
                     if stdout.flush().is_err() {
@@ -514,5 +702,92 @@ mod tests {
 
         let msg2 = make_resize_message(80, 24);
         assert_eq!(msg2, r#"{"type":"resize","cols":80,"rows":24}"#);
+    }
+
+    #[test]
+    fn test_osc_title_simple() {
+        // Test OSC title with BEL terminator: \x1b]0;my-title\x07
+        let mut state = OscState::Normal;
+        let input = b"\x1b]0;my-title\x07";
+        let output = process_osc_titles(input, &mut state);
+        // Should become: \x1b]0;fcm: my-title\x07
+        assert_eq!(output, b"\x1b]0;fcm: my-title\x07");
+    }
+
+    #[test]
+    fn test_osc_title_with_st_terminator() {
+        // Test OSC title with ST terminator: \x1b]0;my-title\x1b\\
+        let mut state = OscState::Normal;
+        let input = b"\x1b]0;my-title\x1b\\";
+        let output = process_osc_titles(input, &mut state);
+        // Should become: \x1b]0;fcm: my-title\x07 (we always emit BEL)
+        assert_eq!(output, b"\x1b]0;fcm: my-title\x07");
+    }
+
+    #[test]
+    fn test_osc_title_mixed_with_text() {
+        // Test OSC title embedded in normal text
+        let mut state = OscState::Normal;
+        let input = b"Hello\x1b]0;my-vm: zsh\x07World";
+        let output = process_osc_titles(input, &mut state);
+        assert_eq!(output, b"Hello\x1b]0;fcm: my-vm: zsh\x07World");
+    }
+
+    #[test]
+    fn test_osc_title_split_across_chunks() {
+        // Test OSC title split across multiple data chunks
+        let mut state = OscState::Normal;
+
+        // First chunk: start of title
+        let output1 = process_osc_titles(b"\x1b]0;my-ti", &mut state);
+        assert_eq!(output1, b""); // Nothing emitted yet, collecting title
+
+        // Second chunk: rest of title
+        let output2 = process_osc_titles(b"tle\x07more text", &mut state);
+        assert_eq!(output2, b"\x1b]0;fcm: my-title\x07more text");
+    }
+
+    #[test]
+    fn test_osc_title_code_2() {
+        // Test OSC code 2 (also sets window title): \x1b]2;my-title\x07
+        let mut state = OscState::Normal;
+        let input = b"\x1b]2;my-title\x07";
+        let output = process_osc_titles(input, &mut state);
+        assert_eq!(output, b"\x1b]0;fcm: my-title\x07");
+    }
+
+    #[test]
+    fn test_osc_other_codes_passthrough() {
+        // Test other OSC codes pass through unchanged (e.g., OSC 8 for hyperlinks)
+        let mut state = OscState::Normal;
+        let input = b"\x1b]8;;https://example.com\x07link\x1b]8;;\x07";
+        let output = process_osc_titles(input, &mut state);
+        // Should pass through (starts with \x1b]8, not \x1b]0 or \x1b]2)
+        assert_eq!(output, input.to_vec());
+    }
+
+    #[test]
+    fn test_osc_normal_escape_sequences_passthrough() {
+        // Test that normal escape sequences (not OSC) pass through
+        let mut state = OscState::Normal;
+        let input = b"\x1b[32mgreen\x1b[0m";
+        let output = process_osc_titles(input, &mut state);
+        assert_eq!(output, input.to_vec());
+    }
+
+    #[test]
+    fn test_api_url_default() {
+        env::remove_var("FCM_HOST");
+        let url = get_api_url_base();
+        assert_eq!(url, "http://127.0.0.1:7777");
+    }
+
+    #[test]
+    fn test_api_url_from_env() {
+        env::set_var("FCM_HOST", "192.168.1.100:7777");
+        let url = get_api_url_base();
+        assert!(url.contains("fcm.192-168-1-100.sslip.io"));
+        assert!(url.starts_with("https://"));
+        env::remove_var("FCM_HOST");
     }
 }

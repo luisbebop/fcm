@@ -1095,6 +1095,118 @@ fn handle_auth_me(request: Request) -> Result<(), Box<dyn Error>> {
     }
 }
 
+/// Handle PUT /vms/{vm}/fs?path=/path/to/file - upload file to VM
+///
+/// Uses SSH to write file content to VM. This is used for:
+/// - Terminfo uploads (e.g., /usr/share/terminfo/x/xterm-256color)
+/// - Other small file transfers
+fn handle_upload_file(
+    mut request: Request,
+    vm_id: &str,
+    access_level: &AccessLevel,
+) -> Result<(), Box<dyn Error>> {
+    // Get the VM config for access check and IP
+    let vm_config = match vm::find_vm(vm_id) {
+        Ok(config) => config,
+        Err(_) => return send_error(request, 404, &format!("VM '{}' not found", vm_id)),
+    };
+
+    // Check access
+    if !access_level.can_access_vm(&vm_config) {
+        return send_error(request, 403, "Access denied");
+    }
+
+    // Check VM is running
+    if vm_config.state != VmState::Running {
+        return send_error(request, 503, "VM is not running");
+    }
+
+    // Parse query string to get path
+    let url = request.url().to_string();
+    let query = url.split('?').nth(1).unwrap_or("");
+    let params = parse_query_string(query);
+
+    let dest_path = match params.get("path") {
+        Some(p) if !p.is_empty() => p.clone(),
+        _ => return send_error(request, 400, "Missing 'path' query parameter"),
+    };
+
+    // Validate path - must be absolute and within allowed directories
+    if !dest_path.starts_with('/') {
+        return send_error(request, 400, "Path must be absolute");
+    }
+
+    // Security: only allow specific directories for uploads
+    let allowed_prefixes = [
+        "/usr/share/terminfo/",
+        "/tmp/",
+    ];
+    if !allowed_prefixes.iter().any(|prefix| dest_path.starts_with(prefix)) {
+        return send_error(request, 403, "Path not in allowed upload directories");
+    }
+
+    // Read file content from request body
+    let mut body = Vec::new();
+    if let Err(e) = request.as_reader().read_to_end(&mut body) {
+        return send_error(request, 400, &format!("Failed to read request body: {}", e));
+    }
+
+    // Upload file to VM via SSH
+    // Use sshpass to handle password auth (root:root in base image)
+    match upload_file_to_vm(&vm_config.ip, &dest_path, &body) {
+        Ok(()) => send_json_response(request, 200, &serde_json::json!({
+            "uploaded": true,
+            "path": dest_path,
+            "size": body.len()
+        })),
+        Err(e) => send_error(request, 500, &format!("Failed to upload file: {}", e)),
+    }
+}
+
+/// Upload file content to VM via SSH
+fn upload_file_to_vm(vm_ip: &str, dest_path: &str, content: &[u8]) -> Result<(), String> {
+    use std::process::{Command, Stdio};
+
+    // Ensure parent directory exists, then write file via stdin
+    // Using cat to write binary data safely
+    let mkdir_cmd = format!(
+        "mkdir -p \"$(dirname '{}')\" && cat > '{}'",
+        dest_path.replace('\'', "'\\''"),
+        dest_path.replace('\'', "'\\''")
+    );
+
+    let mut child = Command::new("sshpass")
+        .args([
+            "-p", "root",
+            "ssh",
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "ConnectTimeout=5",
+            &format!("root@{}", vm_ip),
+            &mkdir_cmd,
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to spawn sshpass: {}", e))?;
+
+    // Write content to stdin
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(content).map_err(|e| format!("Failed to write to stdin: {}", e))?;
+    }
+
+    let output = child.wait_with_output()
+        .map_err(|e| format!("Failed to wait for sshpass: {}", e))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!("SSH command failed: {}", stderr.trim()))
+    }
+}
+
 /// Route and handle a request
 fn handle_request(
     request: Request,
@@ -1142,6 +1254,15 @@ fn handle_request(
             let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
             match parts.as_slice() {
                 ["vms", vm_id] => handle_destroy_vm(request, vm_id, &access_level, console_fds),
+                _ => send_error(request, 404, "Not found"),
+            }
+        }
+        (Method::Put, path) if path.starts_with("/vms/") => {
+            // Strip query string for routing, but keep full path for handler
+            let path_only = path.split('?').next().unwrap_or(path);
+            let parts: Vec<&str> = path_only.trim_start_matches('/').split('/').collect();
+            match parts.as_slice() {
+                ["vms", vm_id, "fs"] => handle_upload_file(request, vm_id, &access_level),
                 _ => send_error(request, 404, "Not found"),
             }
         }
@@ -2108,5 +2229,23 @@ mod tests {
         let msg = r#"{"type":"resize","cols":120,"rows":40}"#;
         let result = parse_resize_message(msg);
         assert_eq!(result, Some((120, 40)));
+    }
+
+    #[test]
+    fn test_upload_path_validation() {
+        // Test allowed upload path prefixes
+        let allowed_prefixes = [
+            "/usr/share/terminfo/",
+            "/tmp/",
+        ];
+
+        // Valid paths
+        assert!(allowed_prefixes.iter().any(|p| "/usr/share/terminfo/x/xterm-256color".starts_with(p)));
+        assert!(allowed_prefixes.iter().any(|p| "/tmp/test.txt".starts_with(p)));
+
+        // Invalid paths
+        assert!(!allowed_prefixes.iter().any(|p| "/etc/passwd".starts_with(p)));
+        assert!(!allowed_prefixes.iter().any(|p| "/root/.ssh/authorized_keys".starts_with(p)));
+        assert!(!allowed_prefixes.iter().any(|p| "/app/code.py".starts_with(p)));
     }
 }
