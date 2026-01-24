@@ -1304,11 +1304,6 @@ fn proxy_agent_io(client_stream: TcpStream, agent_stream: TcpStream, cols: u16, 
     };
     let mut client_write = client_stream;
 
-    // Send clear screen to client before starting proxy
-    // This ensures a clean slate for the TUI app to redraw into
-    // \x1b[2J = clear entire screen, \x1b[H = cursor to home position
-    let _ = client_write.write_all(b"\x1b[2J\x1b[H");
-    let _ = client_write.flush();
 
     let agent_read = match agent_stream.try_clone() {
         Ok(s) => s,

@@ -244,17 +244,11 @@ fn handle_connection(mut stream: TcpStream) {
                     // Send SIGWINCH to child
                     unsafe { libc::kill(child_pid, libc::SIGWINCH) };
 
-                    // On reconnect, trigger full redraw after first resize
+                    // On reconnect, just let SIGWINCH trigger the redraw naturally
+                    // Don't inject any characters - minimal interference with the data stream
                     if needs_prompt_trigger {
-                        // Small delay to let resize take effect
-                        thread::sleep(std::time::Duration::from_millis(50));
-                        // Send Ctrl+L (form feed) to trigger screen redraw
-                        // This is the standard "refresh/redraw" command for TUI apps
-                        unsafe {
-                            libc::write(master_fd, b"\x0c".as_ptr() as *const libc::c_void, 1);
-                        }
                         needs_prompt_trigger = false;
-                        eprintln!("Triggered redraw for reconnect (Ctrl+L)");
+                        eprintln!("Reconnect: SIGWINCH sent, no character injection");
                     }
                 }
             }
