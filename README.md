@@ -295,6 +295,7 @@ Each VM gets:
 | Python | 55 MB | 3.12 |
 | Node.js | 64 MB | 24.x |
 | Bun | 90 MB | 1.3 |
+| Claude Code | 206 MB | latest |
 | **Build Tools** | | |
 | GCC | 21 MB | |
 | Headers | 30 MB | |

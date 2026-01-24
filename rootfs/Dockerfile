@@ -14,6 +14,14 @@ RUN curl -fsSL https://bun.sh/install | bash && \
     ln -s /usr/local/bin/bun /usr/local/bin/bunx && \
     rm -rf /root/.bun
 
+# Install Claude Code CLI
+RUN curl -fsSL https://claude.ai/install.sh | bash && \
+    cp -L /root/.local/bin/claude /usr/local/bin/claude && \
+    rm -rf /root/.local /root/.claude
+
+# Add /usr/local/bin to PATH for all users
+RUN echo 'export PATH="/usr/local/bin:$PATH"' >> /etc/profile
+
 # Configure dropbear SSH and set root password
 RUN mkdir -p /etc/dropbear && \
     dropbearkey -t rsa -f /etc/dropbear/dropbear_rsa_host_key && \
