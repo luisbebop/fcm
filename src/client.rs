@@ -799,8 +799,8 @@ pub fn list_sessions(vm_filter: Option<&str>) -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
-    println!("{:<14} {:<20} {:<15} {:<20}", "ID", "VM", "IP", "CREATED");
-    println!("{}", "-".repeat(71));
+    println!("{:<8} {:<20} {:<15} {:<20}", "ID", "VM", "IP", "CREATED");
+    println!("{}", "-".repeat(65));
 
     for session in sessions {
         let id = session["id"].as_str().unwrap_or("-");
@@ -828,7 +828,7 @@ pub fn list_sessions(vm_filter: Option<&str>) -> Result<(), Box<dyn Error>> {
             "-".to_string()
         };
 
-        println!("{:<14} {:<20} {:<15} {:<20}", id, vm_name, vm_ip, created_str);
+        println!("{:<8} {:<20} {:<15} {:<20}", id, vm_name, vm_ip, created_str);
     }
 
     println!();

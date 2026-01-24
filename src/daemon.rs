@@ -53,13 +53,11 @@ const SESSION_WORDS: &[&str] = &[
     "tide", "tree", "vale", "wave", "wind", "wood",
 ];
 
-/// Generate a nature-word session ID (e.g., "misty-brook")
+/// Generate a single nature-word session ID (e.g., "brook")
 fn generate_console_session_id() -> String {
     use rand::seq::SliceRandom;
     let mut rng = rand::thread_rng();
-    let word1 = SESSION_WORDS.choose(&mut rng).unwrap();
-    let word2 = SESSION_WORDS.choose(&mut rng).unwrap();
-    format!("{}-{}", word1, word2)
+    SESSION_WORDS.choose(&mut rng).unwrap().to_string()
 }
 
 /// Request to create a VM
