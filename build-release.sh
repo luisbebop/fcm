@@ -22,6 +22,11 @@ echo ""
 # Create releases directory if it doesn't exist
 sudo mkdir -p "$RELEASES_DIR"
 
+# Clean up old releases (keep only latest of each platform)
+echo "Cleaning up old releases..."
+sudo rm -f "$RELEASES_DIR"/fcm-*-linux-x86_64.tar.gz
+sudo rm -f "$RELEASES_DIR"/fcm-*-darwin-arm64.tar.gz
+
 # Write current commit and datetime (BRT = UTC-3)
 DATETIME=$(TZ='America/Sao_Paulo' date '+%Y-%m-%d %H:%M BRT')
 echo "$COMMIT $DATETIME" | sudo tee "$RELEASES_DIR/COMMIT" > /dev/null
