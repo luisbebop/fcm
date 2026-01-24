@@ -178,6 +178,10 @@ fn handle_connection(mut stream: TcpStream) {
     // Get or create shell (persists across connections)
     let (mut master_fd, mut child_pid) = ensure_shell_running();
 
+    // Send SIGWINCH to shell to make it redraw prompt on reconnect
+    // This helps when reconnecting to an existing session
+    unsafe { libc::kill(child_pid, libc::SIGWINCH) };
+
     // Set socket to non-blocking for polling
     stream.set_nonblocking(true).ok();
 
