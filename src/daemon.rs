@@ -1386,7 +1386,11 @@ fn proxy_agent_io(client_stream: TcpStream, agent_stream: TcpStream, cols: u16, 
         }
     }
 
-    // Wait for agent reader thread to finish
+    // Shutdown the agent write stream to signal disconnection to fcm-agent
+    // This causes fcm-agent to close its end, unblocking the reader thread
+    let _ = agent_write.shutdown(std::net::Shutdown::Both);
+
+    // Wait for agent reader thread to finish (should exit quickly now)
     let _ = agent_reader_handle.join();
 }
 
