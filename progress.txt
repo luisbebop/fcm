@@ -1397,6 +1397,35 @@
 - All 109 tests pass with zero clippy warnings
 - Commit: 61456d3
 
+### Task 81: Terminal Resize Handling During Console Session
+- Added SIGWINCH signal handler to detect terminal resize during console sessions
+- src/console.rs:
+  - Added RESIZE_PENDING static AtomicBool flag
+  - Added sigwinch_handler() - sets flag when signal received
+  - Added install_sigwinch_handler() - installs signal handler using libc::sigaction
+  - Added make_resize_message() - creates JSON resize message format
+  - Updated connect() function to:
+    - Install SIGWINCH handler on connection
+    - Track last known terminal size
+    - Check RESIZE_PENDING flag in main loop
+    - Send resize message when terminal size changes
+    - Handle EINTR to detect resize after signal
+- src/daemon.rs:
+  - Updated proxy_agent_io() to detect resize messages from client
+  - Resize messages (starting with {"resize") are forwarded directly to fcm-agent
+  - Other data is wrapped in stdin JSON messages as before
+- Protocol flow:
+  1. User resizes terminal window
+  2. Kernel sends SIGWINCH to client process
+  3. Signal handler sets RESIZE_PENDING flag
+  4. Main loop detects flag, gets new terminal size
+  5. Client sends {"resize":{"cols":N,"rows":N}} to daemon
+  6. Daemon forwards resize message to fcm-agent
+  7. fcm-agent applies resize to PTY (TIOCSWINSZ ioctl)
+- Added test for make_resize_message()
+- All 110 tests pass with zero clippy warnings
+- Commit: bee74d1
+
 ## Next Tasks
 - Test console functionality more thoroughly (interactive usage)
-- Consider adding terminal resize handling during session
+- Rebuild base rootfs with fcm-agent for existing VMs
