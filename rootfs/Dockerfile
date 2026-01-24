@@ -2,7 +2,7 @@ FROM alpine:edge
 
 RUN apk add --no-cache \
     dropbear dropbear-scp ruby ruby-bundler ruby-dev python3 py3-pip \
-    curl bash iproute2 rng-tools agetty \
+    curl bash zsh iproute2 rng-tools agetty \
     nodejs npm git \
     build-base libffi-dev yaml-dev zlib-dev openssl-dev \
     tzdata sqlite-dev libpq-dev \

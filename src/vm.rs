@@ -739,8 +739,8 @@ fn spawn_firecracker(config: &VmConfig) -> Result<(Child, RawFd)> {
             &mut master_fd,
             &mut slave_fd,
             std::ptr::null_mut(),
-            std::ptr::null(),
-            std::ptr::null(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
         ) != 0
         {
             return Err(VmError::Process("Failed to create PTY".into()));

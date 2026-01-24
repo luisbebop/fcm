@@ -74,18 +74,10 @@ ss -tlnp 2>&1 >> $LOG || netstat -tlnp 2>&1 >> $LOG
 
 log ">>> init: ssh launched (step 2)"
 
-# Start getty on serial console (ttyS0) for interactive login
-# Note: Console is handled by daemon's PTY connection to Firecracker stdin/stdout
-# getty provides the login shell when a user connects via `fcm console`
-log ">>> init: starting agetty on ttyS0"
-setsid agetty --autologin root --noclear ttyS0 115200 vt100 &
-GETTY_PID=$!
-sleep 1
-if kill -0 $GETTY_PID 2>/dev/null; then
-    log ">>> init: agetty running (pid $GETTY_PID)"
-else
-    log ">>> init: agetty DIED"
-fi
+# Start zsh login shell on serial console (ttyS0) for interactive access
+# This provides a direct shell without getty overhead
+log ">>> init: starting zsh on ttyS0"
+setsid sh -c 'exec zsh --login' <>/dev/ttyS0 >&0 2>&1 &
 
 # Create /app directory for Procfile deployments
 mkdir -p /app
