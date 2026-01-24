@@ -1443,6 +1443,29 @@
 - All 110 tests pass with zero clippy warnings
 - Commit: 706e48c
 
+### Task 83: Persist PTY Session Across Client Disconnects in fcm-agent
+- Fixed critical bug: shell was killed when client disconnected
+- PRD requires: "if client disconnects, PTY session keeps running on fcm-agent"
+- Previous behavior: each TCP connection spawned new shell, disconnect killed it
+- fcm-agent/src/main.rs:
+  - Added SHELL_INITIALIZED AtomicBool flag to track if shell was spawned
+  - Added CONNECTION_LOCK Mutex to ensure only one client connects at a time
+  - Added ensure_shell_running() function:
+    - Returns existing shell if still alive
+    - Only spawns new shell if needed (first connect or after user exit)
+  - Updated handle_connection():
+    - Uses ensure_shell_running() instead of always spawning new shell
+    - Removed shell cleanup on disconnect (shell persists for next client)
+    - Logs "shell preserved for reconnect" on disconnect
+- Rebuilt base-rootfs.img with updated fcm-agent binary
+- Tested with new VM (photon-tensor):
+  - fcm-agent logs show "Spawned shell (pid 535)" only once
+  - Multiple client disconnects show "shell preserved for reconnect"
+  - Shell process (pid 535) remains alive across disconnects
+  - Verified via `ps aux` that shell persists on VM
+- All 110 tests pass with zero clippy warnings
+- Commit: 1faffcd
+
 ## Next Tasks
-- Test console functionality more thoroughly (interactive usage)
-- Rebuild base rootfs with fcm-agent for existing VMs
+- Test full console reconnect flow (verify state preservation with variables/files)
+- Update existing VMs with new fcm-agent (requires rootfs rebuild or manual copy)
