@@ -1699,5 +1699,24 @@
 - All 91 tests pass with zero clippy warnings
 - Commit: dd466f3
 
+### Task 97: Update PRD to Document Serial Console Architecture
+- Updated PRD.md to reflect the implemented serial console architecture
+- Project structure section:
+  - Removed session.rs (deleted in Task 96)
+  - Updated vm.rs description to include "PTY management"
+- Replaced "persistent console sessions" with "serial console (no agent)" section:
+  - New architecture diagram showing PTY connection to Firecracker
+  - Simplified explanation of how serial console works
+  - Added benefits comparison table (fcm-agent vs serial console)
+  - Updated terminal protocol documentation
+  - Updated VM requirements (getty/agetty instead of fcm-agent)
+- Updated base image section:
+  - Changed fcm-agent to agetty in package list
+  - Removed fcm-agent binary copy from Dockerfile
+  - Updated init script description
+- Added "console redesign implementation plan" section for reference
+- All 91 tests pass with zero warnings
+- Commit: 59e9271
+
 ## Next Tasks
 - None currently - serial console implementation complete
