@@ -1965,5 +1965,23 @@
 - All 98 tests pass with zero clippy warnings
 - Commit: e09ada4
 
+### Task 110: Compressed Release Archives with BRT Timezone
+- Changed release format from raw binaries to compressed tar.gz archives
+- Archives contain binary named "fcm" for easy extraction
+- scripts/restart-daemon.sh:
+  - Create tar.gz archives with "fcm" as the binary name inside
+  - Format: fcm-macos-arm64.tar.gz, fcm-macos-x64.tar.gz
+  - Use BRT timezone (America/Sao_Paulo) for COMMIT timestamp
+  - Smaller downloads: ~2.2MB compressed vs ~5MB uncompressed
+- src/daemon.rs:
+  - Updated list_releases() to parse 3-part naming format (fcm-os-arch.tar.gz)
+  - Removed support for raw binary files (no extension)
+- Status page now shows:
+  - Downloads: fcm-macos-arm64.tar.gz, fcm-macos-x64.tar.gz
+  - Timestamp in BRT: "2026-01-24 13:43 BRT"
+- Install command: `curl -sL URL | tar xz && sudo mv fcm /usr/local/bin/`
+- All 98 tests pass with zero clippy warnings
+- Commit: a8ddade
+
 ## Next Tasks
 - None currently - all PRD features complete
