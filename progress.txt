@@ -2057,3 +2057,18 @@
 - Fixed table alignment in `fcm console ls` output
 - All 98 tests pass with zero clippy warnings
 - Commits: a495dda, 3256830, c2a0f04
+
+### Task 115: Console Screen Restoration on Reconnect
+- Fixed issue where TUI apps (like Claude) lost their screen buffer after disconnect/reconnect
+- Root cause: Terminal buffer was stored client-side, lost when WebSocket disconnected
+- Solution: Server-side ring buffer (64KB) stores recent PTY output
+- **Changes to daemon.rs:**
+  - Added `CONSOLE_BUFFER_SIZE` constant (64KB)
+  - Added `output_buffer` field to `ConsoleSession` struct (VecDeque<u8>)
+  - SSH stdout reader thread now stores output in ring buffer
+  - On reconnect, buffer is replayed to client before subscribing to live output
+  - Clear screen (ESC[2J + ESC[H) sent before replay for clean state
+  - Ctrl+L sent after replay to trigger TUI apps to redraw
+- No tmux required - pure server-side buffering
+- All 98 tests pass with zero clippy warnings
+- Commit: b515dff
