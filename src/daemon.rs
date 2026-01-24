@@ -607,6 +607,13 @@ fn generate_status_html(stats: &DaemonStats, user: Option<&UserRecord>) -> Strin
         Create a VM, push your code with git, and it's live with SSL in seconds.
         Each VM gets 1 vCPU, 1GB RAM, and runs your app via Procfile.
     </p>
+
+    <p style="margin:15px 0;">
+        <span style="display:inline-block;background:#cc342d;color:#fff;padding:4px 10px;border-radius:4px;font-size:0.8em;margin:3px 5px 3px 0;">Ruby 3.4</span>
+        <span style="display:inline-block;background:#3776ab;color:#fff;padding:4px 10px;border-radius:4px;font-size:0.8em;margin:3px 5px 3px 0;">Python 3.12</span>
+        <span style="display:inline-block;background:#339933;color:#fff;padding:4px 10px;border-radius:4px;font-size:0.8em;margin:3px 5px 3px 0;">Node.js 24</span>
+        <span style="display:inline-block;background:#fbf0df;color:#000;padding:4px 10px;border-radius:4px;font-size:0.8em;margin:3px 5px 3px 0;">Bun 1.3</span>
+    </p>
 {}
     <h2>Deploy</h2>
     <pre>$ fcm login
