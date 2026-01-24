@@ -2,7 +2,7 @@
 
 use crate::caddy;
 use crate::network;
-use crate::session::{connect_to_agent, send_resize, base64_decode, extract_stdout, extract_exit_code, make_stdin_message, SessionManager};
+use crate::session::{connect_to_agent, base64_decode, extract_stdout, extract_exit_code, make_stdin_message, SessionManager};
 use crate::vm::{self, VmConfig, VmError, VmState, BASE_DIR};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -1246,19 +1246,13 @@ fn handle_terminal_connection(
     let _ = session_manager.get_or_create_console(&config.id, &config.ip);
 
     // Connect to fcm-agent on VM
-    let mut agent_stream = match connect_to_agent(&config.ip) {
+    let agent_stream = match connect_to_agent(&config.ip) {
         Ok(s) => s,
         Err(e) => {
             let _ = send_terminal_error(&mut stream, &format!("Failed to connect to fcm-agent: {}", e));
             return;
         }
     };
-
-    // Send initial terminal size to agent
-    if let Err(e) = send_resize(&mut agent_stream, request.cols, request.rows) {
-        let _ = send_terminal_error(&mut stream, &format!("Failed to send resize: {}", e));
-        return;
-    }
 
     // Send success response to client
     let response = TerminalConnectResponse {
@@ -1274,7 +1268,8 @@ fn handle_terminal_connection(
     let _ = stream.set_read_timeout(None);
 
     // Proxy JSON-framed messages between client and fcm-agent
-    proxy_agent_io(stream, agent_stream);
+    // Pass cols/rows so resize is sent after proxy is established
+    proxy_agent_io(stream, agent_stream, request.cols, request.rows);
 }
 
 /// Send an error response to the terminal client
@@ -1300,7 +1295,7 @@ fn send_terminal_response(stream: &mut TcpStream, response: &TerminalConnectResp
 /// - Client sends raw bytes, we convert to JSON: {"stdin":"base64data"}
 /// - Agent sends JSON: {"stdout":"base64data"}, we decode and send raw bytes to client
 /// - Agent sends {"exit":N} when shell exits (shell respawns automatically)
-fn proxy_agent_io(client_stream: TcpStream, agent_stream: TcpStream) {
+fn proxy_agent_io(client_stream: TcpStream, agent_stream: TcpStream, cols: u16, rows: u16) {
     // Clone streams for threads
     let client_read = match client_stream.try_clone() {
         Ok(s) => s,
@@ -1345,6 +1340,12 @@ fn proxy_agent_io(client_stream: TcpStream, agent_stream: TcpStream) {
             }
         }
     });
+
+    // Send resize AFTER reader thread is spawned (so it's ready to receive prompt output)
+    // This triggers the shell prompt on reconnect via fcm-agent
+    let resize_msg = format!("{{\"resize\":{{\"cols\":{},\"rows\":{}}}}}\n", cols, rows);
+    let _ = agent_write.write_all(resize_msg.as_bytes());
+    let _ = agent_write.flush();
 
     // Main thread reads from client and writes to fcm-agent
     // Client sends raw bytes (encoded to stdin) or JSON resize messages (forwarded directly)
