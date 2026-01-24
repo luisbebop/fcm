@@ -4,6 +4,7 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
+use std::os::unix::io::{FromRawFd, RawFd};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
@@ -391,11 +392,13 @@ fn inject_ssh_key(rootfs_path: &Path, ssh_public_key: &str) -> Result<()> {
 /// 3. Copies the base rootfs (sparse copy)
 /// 4. Injects SSH public key if provided
 /// 5. Creates the tap device
-/// 6. Spawns the firecracker process
+/// 6. Spawns the firecracker process (with PTY for serial console)
 /// 7. Configures firecracker via API
 /// 8. Starts the VM
 /// 9. If expose is set, configures Caddy
-pub fn create_vm(name: Option<String>, expose_port: Option<u16>, ssh_public_key: Option<String>, owner: Option<String>) -> Result<VmConfig> {
+///
+/// Returns (VmConfig, master_fd) where master_fd is the PTY master for serial console
+pub fn create_vm(name: Option<String>, expose_port: Option<u16>, ssh_public_key: Option<String>, owner: Option<String>) -> Result<(VmConfig, RawFd)> {
     // Check that required files exist
     if !Path::new(KERNEL_PATH).exists() {
         return Err(VmError::ResourceNotAvailable(format!(
@@ -461,14 +464,16 @@ pub fn create_vm(name: Option<String>, expose_port: Option<u16>, ssh_public_key:
         return Err(e.into());
     }
 
-    // Spawn firecracker process
-    let fc_result = spawn_firecracker(&config);
-    if let Err(e) = fc_result {
-        // Cleanup on failure
-        let _ = network::delete_tap(&config.id);
-        let _ = fs::remove_dir_all(config.dir());
-        return Err(e);
-    }
+    // Spawn firecracker process (returns PTY master FD for serial console)
+    let (_, master_fd) = match spawn_firecracker(&config) {
+        Ok(result) => result,
+        Err(e) => {
+            // Cleanup on failure
+            let _ = network::delete_tap(&config.id);
+            let _ = fs::remove_dir_all(config.dir());
+            return Err(e);
+        }
+    };
 
     // Wait for socket to be available
     let socket_path = config.socket_path();
@@ -559,7 +564,7 @@ pub fn create_vm(name: Option<String>, expose_port: Option<u16>, ssh_public_key:
         // Don't fail the VM creation for this
     }
 
-    Ok(config)
+    Ok((config, master_fd))
 }
 
 /// Stop a running VM
@@ -600,7 +605,8 @@ pub fn stop_vm(name_or_id: &str) -> Result<VmConfig> {
 }
 
 /// Start a stopped VM
-pub fn start_vm(name_or_id: &str) -> Result<VmConfig> {
+/// Returns (VmConfig, master_fd) where master_fd is the PTY master for serial console
+pub fn start_vm(name_or_id: &str) -> Result<(VmConfig, RawFd)> {
     let mut config = find_vm(name_or_id)
         .map_err(|_| VmError::NotFound(format!("VM '{}' not found", name_or_id)))?;
 
@@ -616,8 +622,8 @@ pub fn start_vm(name_or_id: &str) -> Result<VmConfig> {
     // Create tap device
     network::create_tap(&config.id)?;
 
-    // Spawn firecracker process
-    spawn_firecracker(&config)?;
+    // Spawn firecracker process (returns PTY master FD for serial console)
+    let (_, master_fd) = spawn_firecracker(&config)?;
 
     // Wait for socket to be available
     let socket_path = config.socket_path();
@@ -671,7 +677,7 @@ pub fn start_vm(name_or_id: &str) -> Result<VmConfig> {
     config.state = VmState::Running;
     config.save()?;
 
-    Ok(config)
+    Ok((config, master_fd))
 }
 
 /// Destroy a VM completely
@@ -716,30 +722,57 @@ pub fn destroy_vm(name_or_id: &str) -> Result<()> {
     Ok(())
 }
 
-/// Spawn the firecracker process
-fn spawn_firecracker(config: &VmConfig) -> Result<Child> {
+/// Spawn the firecracker process with PTY for serial console
+/// Returns (Child, master_fd) where master_fd is the PTY master for console I/O
+fn spawn_firecracker(config: &VmConfig) -> Result<(Child, RawFd)> {
     let socket_path = config.socket_path();
     let pid_path = config.pid_path();
 
     // Remove old socket if exists
     let _ = fs::remove_file(&socket_path);
 
-    // Spawn firecracker process
+    // Create a PTY for the serial console
+    let mut master_fd: RawFd = 0;
+    let slave_fd = unsafe {
+        let mut slave_fd: RawFd = 0;
+        if libc::openpty(
+            &mut master_fd,
+            &mut slave_fd,
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            std::ptr::null(),
+        ) != 0
+        {
+            return Err(VmError::Process("Failed to create PTY".into()));
+        }
+        slave_fd
+    };
+
+    // Spawn firecracker process with stdin/stdout connected to PTY slave
     let child = Command::new("firecracker")
-        .args([
-            "--api-sock",
-            socket_path.to_str().unwrap(),
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
+        .args(["--api-sock", socket_path.to_str().unwrap()])
+        .stdin(unsafe { Stdio::from_raw_fd(slave_fd) })
+        .stdout(unsafe { Stdio::from_raw_fd(slave_fd) })
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| VmError::Process(format!("Failed to spawn firecracker: {}", e)))?;
+        .map_err(|e| {
+            // Close PTY FDs on spawn failure
+            unsafe {
+                libc::close(master_fd);
+                libc::close(slave_fd);
+            }
+            VmError::Process(format!("Failed to spawn firecracker: {}", e))
+        })?;
+
+    // Close slave FD in parent (child has it now)
+    unsafe {
+        libc::close(slave_fd);
+    }
 
     // Save PID
     fs::write(&pid_path, child.id().to_string())?;
 
-    Ok(child)
+    Ok((child, master_fd))
 }
 
 /// Kill the firecracker process for a VM

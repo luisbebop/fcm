@@ -2,7 +2,7 @@ FROM alpine:edge
 
 RUN apk add --no-cache \
     dropbear dropbear-scp ruby ruby-bundler ruby-dev python3 py3-pip \
-    curl bash iproute2 rng-tools \
+    curl bash iproute2 rng-tools agetty \
     nodejs npm git \
     build-base libffi-dev yaml-dev zlib-dev openssl-dev \
     tzdata sqlite-dev libpq-dev \
@@ -35,10 +35,6 @@ RUN mkdir -p /app
 # Copy init script to temp location first, then move it
 COPY init /tmp/init
 RUN chmod +x /tmp/init && mv /tmp/init /sbin/init
-
-# Copy fcm-agent binary (PTY manager for console sessions)
-COPY fcm-agent /usr/local/bin/fcm-agent
-RUN chmod +x /usr/local/bin/fcm-agent
 
 # Copy deployment scripts
 COPY fcm-deploy /tmp/fcm-deploy

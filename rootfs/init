@@ -74,15 +74,17 @@ ss -tlnp 2>&1 >> $LOG || netstat -tlnp 2>&1 >> $LOG
 
 log ">>> init: ssh launched (step 2)"
 
-# Start fcm-agent for console sessions (PTY manager)
-log ">>> init: starting fcm-agent"
-/usr/local/bin/fcm-agent >> $LOG 2>&1 &
-AGENT_PID=$!
+# Start getty on serial console (ttyS0) for interactive login
+# Note: Console is handled by daemon's PTY connection to Firecracker stdin/stdout
+# getty provides the login shell when a user connects via `fcm console`
+log ">>> init: starting agetty on ttyS0"
+setsid agetty --autologin root --noclear ttyS0 115200 vt100 &
+GETTY_PID=$!
 sleep 1
-if kill -0 $AGENT_PID 2>/dev/null; then
-    log ">>> init: fcm-agent running (pid $AGENT_PID)"
+if kill -0 $GETTY_PID 2>/dev/null; then
+    log ">>> init: agetty running (pid $GETTY_PID)"
 else
-    log ">>> init: fcm-agent DIED"
+    log ">>> init: agetty DIED"
 fi
 
 # Create /app directory for Procfile deployments

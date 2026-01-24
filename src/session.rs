@@ -1,18 +1,13 @@
 // Session management module for persistent console sessions
 //
-// Connects to fcm-agent on VMs via TCP for PTY management.
-// The fcm-agent handles PTY spawning, I/O, and shell respawning directly.
+// Tracks active console sessions in memory for cleanup when VMs are stopped/destroyed.
+// The actual console I/O is handled via direct PTY proxy to Firecracker's serial console.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
-use std::io::{self, BufRead, BufReader, Write};
-use std::net::TcpStream;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
-/// Port that fcm-agent listens on inside VMs
-pub const AGENT_PORT: u16 = 7779;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Session error types
 #[derive(Debug)]
@@ -21,11 +16,10 @@ pub enum SessionError {
     #[allow(dead_code)] // Used in Display impl for error messages
     NotFound(String),
     /// VM not found or not running
-    #[allow(dead_code)] // Matched in daemon.rs but not constructed yet
+    #[allow(dead_code)] // Used in Display impl for error messages
     VmNotAvailable(String),
-    /// Connection to fcm-agent failed
-    ConnectionFailed(String),
     /// IO error
+    #[allow(dead_code)] // Used for error conversion
     Io(std::io::Error),
 }
 
@@ -34,7 +28,6 @@ impl fmt::Display for SessionError {
         match self {
             SessionError::NotFound(id) => write!(f, "Session '{}' not found", id),
             SessionError::VmNotAvailable(vm) => write!(f, "VM '{}' not available", vm),
-            SessionError::ConnectionFailed(msg) => write!(f, "Connection to fcm-agent failed: {}", msg),
             SessionError::Io(e) => write!(f, "IO error: {}", e),
         }
     }
@@ -94,7 +87,8 @@ impl SessionManager {
     /// Get or create session info for a VM
     ///
     /// This registers the session in memory for tracking.
-    /// The actual connection is made separately via connect_to_agent().
+    /// The actual console connection is handled via direct PTY proxy to Firecracker.
+    #[allow(dead_code)]
     pub fn get_or_create_console(
         &self,
         vm_id: &str,
@@ -125,17 +119,6 @@ impl SessionManager {
         Ok(session)
     }
 
-    /// Create a new session on a VM (legacy API - redirects to get_or_create_console)
-    #[allow(dead_code)]
-    pub fn create_session(
-        &self,
-        vm_id: &str,
-        vm_ip: &str,
-        _is_default: bool,
-    ) -> Result<SessionInfo, SessionError> {
-        self.get_or_create_console(vm_id, vm_ip)
-    }
-
     /// Get a session by ID
     #[allow(dead_code)]
     pub fn get_session(&self, session_id: &str) -> Option<SessionInfo> {
@@ -153,185 +136,6 @@ impl SessionManager {
 impl Default for SessionManager {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-/// Connect to fcm-agent on a VM
-///
-/// Returns a TCP stream for bidirectional communication.
-/// The caller is responsible for the JSON-framed protocol:
-/// - Send: {"stdin":"base64data"} or {"resize":{"cols":N,"rows":N}}
-/// - Recv: {"stdout":"base64data"} or {"exit":N}
-pub fn connect_to_agent(vm_ip: &str) -> Result<TcpStream, SessionError> {
-    let addr = format!("{}:{}", vm_ip, AGENT_PORT);
-
-    let stream = TcpStream::connect_timeout(
-        &addr.parse().map_err(|e| SessionError::ConnectionFailed(format!("Invalid address: {}", e)))?,
-        Duration::from_secs(5),
-    ).map_err(|e| SessionError::ConnectionFailed(format!("Cannot connect to {}: {}", addr, e)))?;
-
-    // Set TCP_NODELAY for low latency
-    stream.set_nodelay(true).ok();
-
-    Ok(stream)
-}
-
-/// Send initial resize message to fcm-agent
-pub fn send_resize(stream: &mut TcpStream, cols: u16, rows: u16) -> io::Result<()> {
-    let msg = format!("{{\"resize\":{{\"cols\":{},\"rows\":{}}}}}\n", cols, rows);
-    stream.write_all(msg.as_bytes())?;
-    stream.flush()
-}
-
-/// Base64 encode data for JSON protocol
-pub fn base64_encode(data: &[u8]) -> String {
-    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut result = String::new();
-    for chunk in data.chunks(3) {
-        let b0 = chunk[0] as usize;
-        let b1 = chunk.get(1).copied().unwrap_or(0) as usize;
-        let b2 = chunk.get(2).copied().unwrap_or(0) as usize;
-        result.push(CHARS[b0 >> 2] as char);
-        result.push(CHARS[((b0 & 0x03) << 4) | (b1 >> 4)] as char);
-        if chunk.len() > 1 {
-            result.push(CHARS[((b1 & 0x0f) << 2) | (b2 >> 6)] as char);
-        } else {
-            result.push('=');
-        }
-        if chunk.len() > 2 {
-            result.push(CHARS[b2 & 0x3f] as char);
-        } else {
-            result.push('=');
-        }
-    }
-    result
-}
-
-/// Base64 decode data from JSON protocol
-pub fn base64_decode(s: &str) -> Vec<u8> {
-    fn char_to_val(c: char) -> u8 {
-        match c {
-            'A'..='Z' => c as u8 - b'A',
-            'a'..='z' => c as u8 - b'a' + 26,
-            '0'..='9' => c as u8 - b'0' + 52,
-            '+' => 62,
-            '/' => 63,
-            _ => 0,
-        }
-    }
-    let chars: Vec<char> = s.chars().filter(|c| *c != '=').collect();
-    let mut result = Vec::new();
-    for chunk in chars.chunks(4) {
-        if chunk.len() >= 2 {
-            let b0 = char_to_val(chunk[0]);
-            let b1 = char_to_val(chunk[1]);
-            result.push((b0 << 2) | (b1 >> 4));
-        }
-        if chunk.len() >= 3 {
-            let b1 = char_to_val(chunk[1]);
-            let b2 = char_to_val(chunk[2]);
-            result.push((b1 << 4) | (b2 >> 2));
-        }
-        if chunk.len() >= 4 {
-            let b2 = char_to_val(chunk[2]);
-            let b3 = char_to_val(chunk[3]);
-            result.push((b2 << 6) | b3);
-        }
-    }
-    result
-}
-
-/// Extract "stdout" value from JSON message
-pub fn extract_stdout(json: &str) -> Option<String> {
-    extract_json_string(json, "stdout")
-}
-
-/// Extract "stdin" value from JSON message
-#[allow(dead_code)] // Used in tests
-pub fn extract_stdin(json: &str) -> Option<String> {
-    extract_json_string(json, "stdin")
-}
-
-/// Extract "exit" code from JSON message
-pub fn extract_exit_code(json: &str) -> Option<i32> {
-    if !json.contains("\"exit\"") {
-        return None;
-    }
-    extract_json_number(json, "exit").map(|n| n as i32)
-}
-
-/// Extract string value from JSON
-fn extract_json_string(json: &str, key: &str) -> Option<String> {
-    let pattern = format!("\"{}\":\"", key);
-    if let Some(start) = json.find(&pattern) {
-        let value_start = start + pattern.len();
-        if let Some(end) = json[value_start..].find('"') {
-            return Some(json[value_start..value_start + end].to_string());
-        }
-    }
-    None
-}
-
-/// Extract number value from JSON
-fn extract_json_number(json: &str, key: &str) -> Option<u32> {
-    let pattern = format!("\"{}\":", key);
-    if let Some(start) = json.find(&pattern) {
-        let value_start = start + pattern.len();
-        let rest = &json[value_start..];
-        let mut num_str = String::new();
-        for c in rest.chars() {
-            if c.is_ascii_digit() {
-                num_str.push(c);
-            } else if !num_str.is_empty() {
-                break;
-            }
-        }
-        return num_str.parse().ok();
-    }
-    None
-}
-
-/// Create stdin message for fcm-agent
-pub fn make_stdin_message(data: &[u8]) -> String {
-    format!("{{\"stdin\":\"{}\"}}\n", base64_encode(data))
-}
-
-/// Create resize message for fcm-agent
-#[allow(dead_code)] // Used in tests and for future client-side use
-pub fn make_resize_message(cols: u16, rows: u16) -> String {
-    format!("{{\"resize\":{{\"cols\":{},\"rows\":{}}}}}\n", cols, rows)
-}
-
-/// Agent connection wrapper for easier I/O
-#[allow(dead_code)] // Convenience wrapper for future use
-pub struct AgentConnection {
-    pub stream: TcpStream,
-    pub reader: BufReader<TcpStream>,
-}
-
-#[allow(dead_code)] // Convenience wrapper for future use
-impl AgentConnection {
-    /// Create new connection to fcm-agent
-    pub fn connect(vm_ip: &str) -> Result<Self, SessionError> {
-        let stream = connect_to_agent(vm_ip)?;
-        let reader = BufReader::new(stream.try_clone()?);
-        Ok(Self { stream, reader })
-    }
-
-    /// Send resize to set initial terminal size
-    pub fn resize(&mut self, cols: u16, rows: u16) -> io::Result<()> {
-        send_resize(&mut self.stream, cols, rows)
-    }
-
-    /// Send stdin data to agent
-    pub fn send_stdin(&mut self, data: &[u8]) -> io::Result<()> {
-        self.stream.write_all(make_stdin_message(data).as_bytes())?;
-        self.stream.flush()
-    }
-
-    /// Read a line from agent (JSON message)
-    pub fn read_line(&mut self, buf: &mut String) -> io::Result<usize> {
-        self.reader.read_line(buf)
     }
 }
 
@@ -388,7 +192,6 @@ mod tests {
     fn test_session_error_display() {
         assert!(SessionError::NotFound("abc".to_string()).to_string().contains("abc"));
         assert!(SessionError::VmNotAvailable("vm1".to_string()).to_string().contains("vm1"));
-        assert!(SessionError::ConnectionFailed("timeout".to_string()).to_string().contains("timeout"));
     }
 
     #[test]
@@ -438,66 +241,5 @@ mod tests {
         // Check that vm1 sessions are gone but vm2 sessions remain
         assert!(manager.get_session("test1").is_none());
         assert!(manager.get_session("test2").is_some());
-    }
-
-    #[test]
-    fn test_base64_encode() {
-        assert_eq!(base64_encode(b"Hello"), "SGVsbG8=");
-        assert_eq!(base64_encode(b""), "");
-        assert_eq!(base64_encode(b"a"), "YQ==");
-        assert_eq!(base64_encode(b"ab"), "YWI=");
-        assert_eq!(base64_encode(b"abc"), "YWJj");
-    }
-
-    #[test]
-    fn test_base64_decode() {
-        assert_eq!(base64_decode("SGVsbG8="), b"Hello");
-        assert_eq!(base64_decode(""), b"");
-        assert_eq!(base64_decode("YQ=="), b"a");
-        assert_eq!(base64_decode("YWI="), b"ab");
-        assert_eq!(base64_decode("YWJj"), b"abc");
-    }
-
-    #[test]
-    fn test_base64_roundtrip() {
-        let data = b"Hello, World! \x00\x01\x02\xff";
-        assert_eq!(base64_decode(&base64_encode(data)), data);
-    }
-
-    #[test]
-    fn test_extract_stdout() {
-        assert_eq!(extract_stdout(r#"{"stdout":"SGVsbG8="}"#), Some("SGVsbG8=".to_string()));
-        assert_eq!(extract_stdout(r#"{"exit":0}"#), None);
-    }
-
-    #[test]
-    fn test_extract_stdin() {
-        assert_eq!(extract_stdin(r#"{"stdin":"SGVsbG8="}"#), Some("SGVsbG8=".to_string()));
-        assert_eq!(extract_stdin(r#"{"exit":0}"#), None);
-    }
-
-    #[test]
-    fn test_extract_exit_code() {
-        assert_eq!(extract_exit_code(r#"{"exit":0}"#), Some(0));
-        assert_eq!(extract_exit_code(r#"{"exit":127}"#), Some(127));
-        assert_eq!(extract_exit_code(r#"{"stdout":"data"}"#), None);
-    }
-
-    #[test]
-    fn test_make_stdin_message() {
-        let msg = make_stdin_message(b"ls\n");
-        assert!(msg.contains("stdin"));
-        assert!(msg.ends_with('\n'));
-    }
-
-    #[test]
-    fn test_make_resize_message() {
-        let msg = make_resize_message(120, 40);
-        assert_eq!(msg, "{\"resize\":{\"cols\":120,\"rows\":40}}\n");
-    }
-
-    #[test]
-    fn test_agent_port() {
-        assert_eq!(AGENT_PORT, 7779);
     }
 }

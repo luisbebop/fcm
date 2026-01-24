@@ -2,7 +2,7 @@
 
 use crate::caddy;
 use crate::network;
-use crate::session::{connect_to_agent, base64_decode, extract_stdout, extract_exit_code, make_stdin_message, SessionManager};
+use crate::session::SessionManager;
 use crate::vm::{self, VmConfig, VmError, VmState, BASE_DIR};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -11,11 +11,15 @@ use std::error::Error;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::os::unix::io::RawFd;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Instant;
 use tiny_http::{Header, Method, Request, Response, Server};
+
+/// PTY master file descriptors for console access (VM ID -> master FD)
+type ConsoleFds = Arc<Mutex<HashMap<String, RawFd>>>;
 
 /// Request to create a VM
 #[derive(Debug, Deserialize, Default)]
@@ -909,7 +913,7 @@ fn send_error(request: Request, status_code: u16, message: &str) -> Result<(), B
 }
 
 /// Handle POST /vms - create a new VM
-fn handle_create_vm(mut request: Request, access_level: &AccessLevel) -> Result<(), Box<dyn Error>> {
+fn handle_create_vm(mut request: Request, access_level: &AccessLevel, console_fds: &ConsoleFds) -> Result<(), Box<dyn Error>> {
     // Parse request body for SSH public key
     let create_request: CreateVmRequest = {
         let mut body = String::new();
@@ -933,7 +937,9 @@ fn handle_create_vm(mut request: Request, access_level: &AccessLevel) -> Result<
 
     // Always use random name and expose port 3000 by default
     match vm::create_vm(None, Some(DEFAULT_EXPOSE_PORT), create_request.ssh_public_key, owner) {
-        Ok(config) => {
+        Ok((config, master_fd)) => {
+            // Store the PTY master FD for console access
+            console_fds.lock().unwrap().insert(config.id.clone(), master_fd);
             let response = VmResponse::from(&config);
             send_json_response(request, 201, &response)
         }
@@ -982,6 +988,7 @@ fn handle_stop_vm(
     vm_id: &str,
     session_manager: &SessionManager,
     access_level: &AccessLevel,
+    console_fds: &ConsoleFds,
 ) -> Result<(), Box<dyn Error>> {
     // Get the VM config for access check and session cleanup
     let vm_config = match vm::find_vm(vm_id) {
@@ -998,6 +1005,10 @@ fn handle_stop_vm(
         Ok(config) => {
             // Clean up sessions for this VM
             session_manager.remove_vm_sessions(&vm_config.id);
+            // Close and remove the PTY master FD
+            if let Some(fd) = console_fds.lock().unwrap().remove(&vm_config.id) {
+                unsafe { libc::close(fd); }
+            }
             let response = VmResponse::from(&config);
             send_json_response(request, 200, &response)
         }
@@ -1013,7 +1024,7 @@ fn handle_stop_vm(
 }
 
 /// Handle POST /vms/{id}/start - start a stopped VM
-fn handle_start_vm(request: Request, vm_id: &str, access_level: &AccessLevel) -> Result<(), Box<dyn Error>> {
+fn handle_start_vm(request: Request, vm_id: &str, access_level: &AccessLevel, console_fds: &ConsoleFds) -> Result<(), Box<dyn Error>> {
     // Get the VM config for access check
     let vm_config = match vm::find_vm(vm_id) {
         Ok(config) => config,
@@ -1026,7 +1037,9 @@ fn handle_start_vm(request: Request, vm_id: &str, access_level: &AccessLevel) ->
     }
 
     match vm::start_vm(vm_id) {
-        Ok(config) => {
+        Ok((config, master_fd)) => {
+            // Store the PTY master FD for console access
+            console_fds.lock().unwrap().insert(config.id.clone(), master_fd);
             let response = VmResponse::from(&config);
             send_json_response(request, 200, &response)
         }
@@ -1048,6 +1061,7 @@ fn handle_destroy_vm(
     vm_id: &str,
     session_manager: &SessionManager,
     access_level: &AccessLevel,
+    console_fds: &ConsoleFds,
 ) -> Result<(), Box<dyn Error>> {
     // Get the VM config for access check and session cleanup
     let vm_config = match vm::find_vm(vm_id) {
@@ -1064,6 +1078,10 @@ fn handle_destroy_vm(
         Ok(()) => {
             // Clean up sessions for this VM
             session_manager.remove_vm_sessions(&vm_config.id);
+            // Close and remove the PTY master FD
+            if let Some(fd) = console_fds.lock().unwrap().remove(&vm_config.id) {
+                unsafe { libc::close(fd); }
+            }
             send_json_response(request, 200, &serde_json::json!({"deleted": true}))
         }
         Err(e) => {
@@ -1110,6 +1128,7 @@ fn handle_request(
     request: Request,
     token: &str,
     session_manager: &SessionManager,
+    console_fds: &ConsoleFds,
 ) -> Result<(), Box<dyn Error>> {
     let path = request.url().to_string();
     let method = request.method().clone();
@@ -1129,7 +1148,7 @@ fn handle_request(
         (Method::Get, "/auth/me") => handle_auth_me(request),
 
         // VM collection routes
-        (Method::Post, "/vms") => handle_create_vm(request, &access_level),
+        (Method::Post, "/vms") => handle_create_vm(request, &access_level, console_fds),
         (Method::Get, "/vms") => handle_list_vms(request, &access_level),
 
         // VM instance routes
@@ -1143,15 +1162,15 @@ fn handle_request(
         (Method::Post, path) if path.starts_with("/vms/") => {
             let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
             match parts.as_slice() {
-                ["vms", vm_id, "stop"] => handle_stop_vm(request, vm_id, session_manager, &access_level),
-                ["vms", vm_id, "start"] => handle_start_vm(request, vm_id, &access_level),
+                ["vms", vm_id, "stop"] => handle_stop_vm(request, vm_id, session_manager, &access_level, console_fds),
+                ["vms", vm_id, "start"] => handle_start_vm(request, vm_id, &access_level, console_fds),
                 _ => send_error(request, 404, "Not found"),
             }
         }
         (Method::Delete, path) if path.starts_with("/vms/") => {
             let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
             match parts.as_slice() {
-                ["vms", vm_id] => handle_destroy_vm(request, vm_id, session_manager, &access_level),
+                ["vms", vm_id] => handle_destroy_vm(request, vm_id, session_manager, &access_level, console_fds),
                 _ => send_error(request, 404, "Not found"),
             }
         }
@@ -1165,11 +1184,11 @@ fn handle_request(
     }
 }
 
-/// Handle a single terminal connection
+/// Handle a single terminal connection using direct PTY I/O
 fn handle_terminal_connection(
     mut stream: TcpStream,
     token: &str,
-    session_manager: &SessionManager,
+    console_fds: &ConsoleFds,
 ) {
     // Set a read timeout for the initial handshake
     if stream
@@ -1243,14 +1262,11 @@ fn handle_terminal_connection(
         return;
     }
 
-    // Register session in memory (for tracking)
-    let _ = session_manager.get_or_create_console(&config.id, &config.ip);
-
-    // Connect to fcm-agent on VM
-    let agent_stream = match connect_to_agent(&config.ip) {
-        Ok(s) => s,
-        Err(e) => {
-            let _ = send_terminal_error(&mut stream, &format!("Failed to connect to fcm-agent: {}", e));
+    // Get the PTY master FD for this VM
+    let master_fd = match console_fds.lock().unwrap().get(&config.id).copied() {
+        Some(fd) => fd,
+        None => {
+            let _ = send_terminal_error(&mut stream, "Console not available (VM may need restart)");
             return;
         }
     };
@@ -1268,9 +1284,11 @@ fn handle_terminal_connection(
     // Clear read timeout for I/O proxying
     let _ = stream.set_read_timeout(None);
 
-    // Proxy JSON-framed messages between client and fcm-agent
-    // Pass cols/rows so resize is sent after proxy is established
-    proxy_agent_io(stream, agent_stream, request.cols, request.rows);
+    // Set initial terminal size
+    set_pty_window_size(master_fd, request.cols, request.rows);
+
+    // Proxy raw bytes between client and PTY
+    proxy_pty_io(stream, master_fd);
 }
 
 /// Send an error response to the terminal client
@@ -1290,70 +1308,62 @@ fn send_terminal_response(stream: &mut TcpStream, response: &TerminalConnectResp
     stream.flush()
 }
 
-/// Proxy I/O between client TCP stream and fcm-agent
+/// Set the PTY window size using ioctl
+fn set_pty_window_size(master_fd: RawFd, cols: u16, rows: u16) {
+    #[repr(C)]
+    struct Winsize {
+        ws_row: libc::c_ushort,
+        ws_col: libc::c_ushort,
+        ws_xpixel: libc::c_ushort,
+        ws_ypixel: libc::c_ushort,
+    }
+
+    let winsize = Winsize {
+        ws_row: rows,
+        ws_col: cols,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+
+    unsafe {
+        libc::ioctl(master_fd, libc::TIOCSWINSZ, &winsize);
+    }
+}
+
+/// Proxy raw bytes between client TCP stream and PTY master
 ///
-/// Protocol:
-/// - Client sends raw bytes, we convert to JSON: {"stdin":"base64data"}
-/// - Agent sends JSON: {"stdout":"base64data"}, we decode and send raw bytes to client
-/// - Agent sends {"exit":N} when shell exits (shell respawns automatically)
-fn proxy_agent_io(client_stream: TcpStream, agent_stream: TcpStream, cols: u16, rows: u16) {
-    // Clone streams for threads
+/// This is the serial console approach - no JSON, no base64, just raw bytes.
+/// The PTY is connected directly to Firecracker's stdin/stdout which connects
+/// to the VM's /dev/ttyS0 serial console.
+fn proxy_pty_io(client_stream: TcpStream, master_fd: RawFd) {
+    use std::os::unix::io::AsRawFd;
+
+    // Clone stream for the reader thread
     let client_read = match client_stream.try_clone() {
         Ok(s) => s,
         Err(_) => return,
     };
     let mut client_write = client_stream;
+    let client_write_fd = client_write.as_raw_fd();
 
-
-    let agent_read = match agent_stream.try_clone() {
-        Ok(s) => s,
-        Err(_) => return,
-    };
-    let mut agent_write = agent_stream;
-
-    // Thread to read from fcm-agent and write to client
-    // Agent sends JSON messages, we decode and send raw bytes
-    let agent_reader_handle = thread::spawn(move || {
-        let mut reader = BufReader::new(agent_read);
-        let mut line = String::new();
-
+    // Thread to read from PTY and write to client
+    let pty_reader_handle = thread::spawn(move || {
+        let mut buf = [0u8; 4096];
         loop {
-            line.clear();
-            match reader.read_line(&mut line) {
-                Ok(0) => break, // EOF
-                Ok(_) => {
-                    let trimmed = line.trim();
-                    if let Some(encoded) = extract_stdout(trimmed) {
-                        // Decode base64 and write raw bytes to client
-                        let decoded = base64_decode(&encoded);
-                        if client_write.write_all(&decoded).is_err() {
-                            break;
-                        }
-                        if client_write.flush().is_err() {
-                            break;
-                        }
-                    } else if extract_exit_code(trimmed).is_some() {
-                        // Shell exited - close connection (like SSH behavior)
-                        // Shell will respawn on next `fcm console` connection
-                        break;
-                    }
-                }
-                Err(_) => break,
+            let n = unsafe { libc::read(master_fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
+            if n <= 0 {
+                break; // EOF or error
+            }
+            if client_write.write_all(&buf[..n as usize]).is_err() {
+                break;
+            }
+            if client_write.flush().is_err() {
+                break;
             }
         }
     });
 
-    // Small delay to ensure reader thread is running before we trigger prompt
-    thread::sleep(std::time::Duration::from_millis(50));
-
-    // Send resize AFTER reader thread is spawned (so it's ready to receive prompt output)
-    // This triggers the shell prompt on reconnect via fcm-agent
-    let resize_msg = format!("{{\"resize\":{{\"cols\":{},\"rows\":{}}}}}\n", cols, rows);
-    let _ = agent_write.write_all(resize_msg.as_bytes());
-    let _ = agent_write.flush();
-
-    // Main thread reads from client and writes to fcm-agent
-    // Client sends raw bytes (encoded to stdin) or JSON resize messages (forwarded directly)
+    // Main thread reads from client and writes to PTY
     let mut buf = [0u8; 4096];
     let mut client_read_stream = client_read;
 
@@ -1366,34 +1376,51 @@ fn proxy_agent_io(client_stream: TcpStream, agent_stream: TcpStream, cols: u16, 
                 // Check if this is a resize message from client
                 // Resize messages start with {"resize": and are JSON
                 if data.starts_with(b"{\"resize\"") {
-                    // Forward resize message directly to agent (add newline if missing)
-                    if agent_write.write_all(data).is_err() {
-                        break;
-                    }
-                    if !data.ends_with(b"\n") && agent_write.write_all(b"\n").is_err() {
-                        break;
+                    // Parse resize message and set window size
+                    if let Ok(msg) = std::str::from_utf8(data) {
+                        if let Some((cols, rows)) = parse_resize_message(msg) {
+                            set_pty_window_size(master_fd, cols, rows);
+                        }
                     }
                 } else {
-                    // Encode as JSON stdin message
-                    let msg = make_stdin_message(data);
-                    if agent_write.write_all(msg.as_bytes()).is_err() {
+                    // Write raw bytes to PTY
+                    let written = unsafe {
+                        libc::write(master_fd, data.as_ptr() as *const libc::c_void, data.len())
+                    };
+                    if written <= 0 {
                         break;
                     }
-                }
-                if agent_write.flush().is_err() {
-                    break;
                 }
             }
             Err(_) => break,
         }
     }
 
-    // Shutdown the agent write stream to signal disconnection to fcm-agent
-    // This causes fcm-agent to close its end, unblocking the reader thread
-    let _ = agent_write.shutdown(std::net::Shutdown::Both);
+    // Shutdown the client read side to signal disconnection
+    // This will cause the PTY reader thread to eventually exit when it tries to write
+    unsafe {
+        libc::shutdown(client_write_fd, libc::SHUT_RDWR);
+    }
 
-    // Wait for agent reader thread to finish (should exit quickly now)
-    let _ = agent_reader_handle.join();
+    // Wait for PTY reader thread to finish
+    let _ = pty_reader_handle.join();
+}
+
+/// Parse a resize message like {"resize":{"cols":120,"rows":40}}
+fn parse_resize_message(msg: &str) -> Option<(u16, u16)> {
+    // Simple parsing - find cols and rows values
+    let msg = msg.trim();
+    let cols_start = msg.find("\"cols\":")?;
+    let cols_str = &msg[cols_start + 7..];
+    let cols_end = cols_str.find(|c: char| !c.is_ascii_digit())?;
+    let cols: u16 = cols_str[..cols_end].parse().ok()?;
+
+    let rows_start = msg.find("\"rows\":")?;
+    let rows_str = &msg[rows_start + 7..];
+    let rows_end = rows_str.find(|c: char| !c.is_ascii_digit()).unwrap_or(rows_str.len());
+    let rows: u16 = rows_str[..rows_end].parse().ok()?;
+
+    Some((cols, rows))
 }
 
 /// Parse HTTP request and extract method, path, headers
@@ -1709,7 +1736,7 @@ fn run_status_server(stats: Arc<DaemonStats>, sessions: SessionStore) {
 }
 
 /// Run the terminal server (port 7778)
-fn run_terminal_server(token: String, session_manager: SessionManager) {
+fn run_terminal_server(token: String, console_fds: ConsoleFds) {
     let listener = match TcpListener::bind(TERMINAL_BIND_ADDR) {
         Ok(l) => l,
         Err(e) => {
@@ -1724,11 +1751,11 @@ fn run_terminal_server(token: String, session_manager: SessionManager) {
         match stream {
             Ok(stream) => {
                 let token = token.clone();
-                let session_manager = session_manager.clone();
+                let console_fds = Arc::clone(&console_fds);
 
                 // Handle each connection in a new thread
                 thread::spawn(move || {
-                    handle_terminal_connection(stream, &token, &session_manager);
+                    handle_terminal_connection(stream, &token, &console_fds);
                 });
             }
             Err(e) => {
@@ -1779,6 +1806,9 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     // Create session manager for persistent console sessions
     let session_manager = SessionManager::new();
 
+    // Create PTY FD storage for serial console
+    let console_fds: ConsoleFds = Arc::new(Mutex::new(HashMap::new()));
+
     // Start status page server in a separate thread
     {
         let stats_clone = Arc::clone(&stats);
@@ -1791,9 +1821,9 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     // Start terminal server in a separate thread
     {
         let terminal_token = token.clone();
-        let terminal_session_manager = session_manager.clone();
+        let terminal_console_fds = Arc::clone(&console_fds);
         thread::spawn(move || {
-            run_terminal_server(terminal_token, terminal_session_manager);
+            run_terminal_server(terminal_token, terminal_console_fds);
         });
     }
 
@@ -1803,7 +1833,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
 
     // Handle requests
     for request in server.incoming_requests() {
-        if let Err(e) = handle_request(request, &token, &session_manager) {
+        if let Err(e) = handle_request(request, &token, &session_manager, &console_fds) {
             eprintln!("Error handling request: {}", e);
         }
     }
