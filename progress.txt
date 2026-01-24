@@ -1879,5 +1879,21 @@
   - Shows download instructions for macOS clients
 - Commit: 4052044
 
+### Task 104: Fix Test Failures from Task 103 Cleanup
+- Task 103 removed functions but left behind their tests, causing test failures
+- Removed obsolete tests for deleted functions:
+  - `test_shell_escape()` - tested shell_escape() which was removed
+  - `test_parse_resize_message_new_format()` - tested parse_resize_message() which was removed
+- Fixed parallel test interference causing flaky test failures:
+  - Tests modifying FCM_HOST env var interfered when running in parallel
+  - Added `serial_test = "3"` to dev-dependencies (Cargo.toml)
+  - Imported `use serial_test::serial;` in client.rs test module
+  - Added `#[serial]` attribute to tests that modify FCM_HOST:
+    - test_daemon_url_default
+    - test_daemon_url_from_env
+    - test_daemon_url_with_scheme
+- All 99 tests pass with zero clippy warnings
+- Commit: 7175cbe
+
 ## Next Tasks
 - None currently - all PRD features complete
