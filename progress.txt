@@ -1322,5 +1322,30 @@
 - All 103 tests pass with zero warnings
 - Commits: feaea00, e909917
 
+### Task 78: PRD Update - WebSocket+PTY Console Architecture
+- Updated PRD.md to document new WebSocket+PTY console architecture (like Sprite)
+- Replaces SSH+tmux approach with simpler fcm-agent PTY manager
+- Changes made to PRD.md:
+  - Commands section: removed `sessions` and `attach` commands (already removed from code)
+  - Project structure: updated session.rs description
+  - Persistent console sessions: complete rewrite with new architecture
+    - New diagram: CLI → Daemon → fcm-agent → PTY → shell
+    - fcm-agent manages PTY directly (no SSH/tmux for console)
+    - JSON framed terminal protocol specification
+    - One session per VM, auto-reconnect, auto-respawn shell
+  - Base image: replaced tmux with fcm-agent, clarified SSH is only for git push
+  - Verification: simplified flow (removed sessions/attach steps)
+- Benefits of new architecture:
+  - No SSH/tmux dependencies for console access
+  - Direct PTY = better signal handling, cleaner resize
+  - JSON framed protocol = no raw byte streaming issues
+  - Browser-ready for future web terminal
+  - Simpler codebase
+- Note: This is a PRD documentation update. Implementation will follow.
+- Commit: d1f06bc
+
 ## Next Tasks
-(none - project complete per PRD)
+- Implement fcm-agent binary for VM (PTY manager)
+- Update session.rs to connect to fcm-agent instead of SSH+tmux
+- Update daemon.rs terminal server for new protocol
+- Update base rootfs image with fcm-agent

@@ -22,8 +22,6 @@ simple token-based auth:
 fcm create                    # create vm with random name, expose port 3000
 fcm ls                        # list vms
 fcm console <vm>              # open persistent console session
-fcm sessions <vm>             # list active sessions for a vm
-fcm attach <vm> <session-id>  # reattach to existing session
 fcm stop <vm>                 # stop vm
 fcm start <vm>                # start stopped vm
 fcm destroy <vm>              # destroy vm
@@ -63,7 +61,7 @@ fcm/
     ├── daemon.rs        # http server on :7777, terminal server on :7778
     ├── client.rs        # http client to daemon (with token auth)
     ├── console.rs       # terminal streaming client for console/attach
-    ├── session.rs       # session management (create/list/attach tmux sessions)
+    ├── session.rs       # session management (connect to fcm-agent in VM)
     ├── vm.rs            # vm create/start/stop/destroy
     ├── firecracker.rs   # firecracker api over unix socket
     ├── network.rs       # tap device, ip allocation
@@ -117,50 +115,84 @@ cli-based interactive console with persistent, detachable sessions (similar to s
 ### architecture
 
 ```
-┌─────────────┐         ┌─────────────┐         ┌─────────┐
-│  fcm CLI    │ ──TCP── │   Daemon    │ ──SSH── │   VM    │
-│ (any host)  │  :7778  │  (manages   │         │ (tmux)  │
-└─────────────┘         │  sessions)  │         └─────────┘
-                        └─────────────┘
+┌─────────────┐         ┌─────────────┐         ┌───────────┐
+│  fcm CLI    │ ──TCP── │   Daemon    │ ──TCP── │ fcm-agent │
+│ (any host)  │  :7778  │  (proxies)  │  :7779  │   (PTY)   │
+└─────────────┘         └─────────────┘         └───────────┘
+                                                      │
+                                                    [PTY]
+                                                      │
+                                                   /bin/sh
 ```
 
 ### how it works
 
-1. each vm runs `tmux` by default
-2. daemon manages sessions internally (creates/attaches tmux sessions via ssh to vm)
-3. cli connects to daemon on streaming port (7778)
-4. daemon proxies terminal i/o between cli and vm's tmux session
-5. if client disconnects (network drop, close terminal), tmux session keeps running
-6. client can reconnect anytime with `fcm attach`
+1. each VM runs `fcm-agent` on port 7779 (started by init)
+2. fcm-agent manages PTY sessions directly (no SSH/tmux needed)
+3. CLI connects to daemon on port 7778
+4. daemon proxies messages to fcm-agent on VM's internal IP
+5. if client disconnects, PTY session keeps running on fcm-agent
+6. client can reconnect anytime with `fcm console`
 
 ### session management
 
-- `fcm console <vm>` - creates new session or attaches to existing default session
-- `fcm sessions <vm>` - lists all active sessions for a vm
-- `fcm attach <vm> <session-id>` - reattaches to a specific session
-- sessions persist until explicitly killed or vm is stopped
-- supports multiple concurrent sessions per vm (multi-user ready)
+- `fcm console <vm>` - connects to VM's persistent console session
+- one session per VM (simple, no session IDs to manage)
+- session persists until VM is stopped
+- if shell exits (user types `exit`), new shell spawns automatically
 
-### daemon endpoints
+### terminal protocol (port 7778)
+
+JSON framed messages (newline-delimited):
+
+```json
+// client -> daemon: initial connect
+{"vm": "vm-id", "token": "auth-token", "cols": 80, "rows": 24}
+
+// daemon -> client: connect response
+{"success": true}
+{"success": false, "error": "VM not found"}
+
+// bidirectional: terminal I/O
+{"stdin": "base64-encoded-input"}      // client -> daemon -> agent
+{"stdout": "base64-encoded-output"}    // agent -> daemon -> client
+
+// client -> daemon -> agent: resize terminal
+{"resize": {"cols": 120, "rows": 40}}
+
+// agent -> daemon -> client: shell exited (new shell spawns)
+{"exit": 0}
+```
+
+### fcm-agent
+
+small daemon running on each VM that manages PTY sessions:
 
 ```
-POST   /vms/{id}/sessions              # create new session, returns session-id
-GET    /vms/{id}/sessions              # list active sessions
-DELETE /vms/{id}/sessions/{session-id} # kill a session
+fcm-agent
+├── listens on TCP :7779 (internal network only)
+├── accepts connection from daemon (172.16.0.1)
+├── spawns PTY with /bin/sh
+├── proxies stdin/stdout between TCP and PTY
+├── handles resize (SIGWINCH to PTY)
+└── respawns shell if user exits
 ```
 
-### terminal streaming (port 7778)
+protocol (TCP :7779, JSON newline-delimited):
+```json
+{"stdin": "base64data"}                // write to PTY
+{"stdout": "base64data"}               // read from PTY
+{"resize": {"cols": 80, "rows": 24}}   // resize PTY
+{"exit": 0}                            // shell exited
+```
 
-- daemon listens on tcp port 7778 for terminal connections
-- client connects, sends: `{"vm": "vm-id", "session": "session-id", "token": "auth-token"}`
-- daemon authenticates, then spawns `ssh root@vm-ip tmux attach -t session-id`
-- daemon proxies raw terminal i/o between client and ssh process
-- client handles raw terminal mode for proper tty experience
+implementation: ~200 lines of Rust, ~50KB binary, no dependencies
 
 ### vm requirements
 
-- tmux installed in base rootfs
-- ssh access from daemon to vm (already works via internal network)
+- fcm-agent binary at /usr/local/bin/fcm-agent
+- fcm-agent started by init, listens on port 7779
+- no SSH/tmux required for console (SSH still used for git push)
 
 ## procfile deployment
 
@@ -224,10 +256,11 @@ remote: -----> Live at https://cosmic-nova.64-34-93-45.sslip.io
 ## base image
 
 create new alpine-based rootfs with:
-- dropbear (lightweight ssh server for daemon to connect via tmux)
-- tmux (for persistent console sessions)
+- dropbear (lightweight ssh server for git push deployment)
+- fcm-agent (PTY manager for console sessions)
 - ruby 4.0 + bundler (latest stable: 4.0.1) for heroku-style deployments
 - python 3.14 + pip (latest stable: 3.14.2) for heroku-style deployments
+- nodejs + bun for javascript deployments
 - rng-tools (for entropy initialization in firecracker)
 - minimal init script
 
@@ -237,21 +270,25 @@ FROM alpine:edge
 
 RUN apk add --no-cache \
     dropbear dropbear-scp ruby ruby-bundler python3 py3-pip \
-    tmux curl bash iproute2 rng-tools
+    nodejs npm curl bash iproute2 rng-tools
 
-# Configure dropbear SSH and set root password
+# Configure dropbear SSH and set root password (for git push)
 RUN mkdir -p /etc/dropbear && \
     dropbearkey -t rsa -f /etc/dropbear/dropbear_rsa_host_key && \
     dropbearkey -t ecdsa -f /etc/dropbear/dropbear_ecdsa_host_key && \
     dropbearkey -t ed25519 -f /etc/dropbear/dropbear_ed25519_host_key && \
     echo "root:root" | chpasswd
 
-# Copy init script to temp location first, then move it
+# Copy fcm-agent binary (for console sessions)
+COPY fcm-agent /usr/local/bin/fcm-agent
+RUN chmod +x /usr/local/bin/fcm-agent
+
+# Copy init script
 COPY init /tmp/init
 RUN chmod +x /tmp/init && mv /tmp/init /sbin/init
 ```
 
-init script starts dropbear ssh and a simple http server on port 3000 (shows "hello from fcm VM").
+init script starts dropbear ssh (for git push) and fcm-agent (for console).
 
 build: `docker build + docker export + dd + mkfs.ext4 + tar extract`
 
@@ -289,11 +326,10 @@ build: `docker build + docker export + dd + mkfs.ext4 + tar extract`
 2. `fcm create` - create vm (auto-generates name like "cosmic-nova")
 3. `fcm ls` - see vm running
 4. `fcm console cosmic-nova` - open persistent console, verify ruby/python available
-5. disconnect (close terminal or network drop)
-6. `fcm sessions cosmic-nova` - see session still running
-7. `fcm attach cosmic-nova <session-id>` - reattach, verify state preserved
-8. `curl https://cosmic-nova.64-34-93-45.sslip.io` - verify ssl works
-9. `fcm destroy cosmic-nova` - cleanup
+5. disconnect (Ctrl+] or close terminal)
+6. `fcm console cosmic-nova` - reconnect to same session, verify state preserved
+7. `curl https://cosmic-nova.64-34-93-45.sslip.io` - verify ssl works
+8. `fcm destroy cosmic-nova` - cleanup
 
 ## multi-user authentication
 
