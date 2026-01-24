@@ -252,7 +252,6 @@ pub fn extract_stdin(json: &str) -> Option<String> {
 }
 
 /// Extract "exit" code from JSON message
-#[allow(dead_code)] // Used in tests and for future client-side use
 pub fn extract_exit_code(json: &str) -> Option<i32> {
     if !json.contains("\"exit\"") {
         return None;
@@ -273,7 +272,6 @@ fn extract_json_string(json: &str, key: &str) -> Option<String> {
 }
 
 /// Extract number value from JSON
-#[allow(dead_code)] // Used by extract_exit_code
 fn extract_json_number(json: &str, key: &str) -> Option<u32> {
     let pattern = format!("\"{}\":", key);
     if let Some(start) = json.find(&pattern) {
