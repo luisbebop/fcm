@@ -1848,5 +1848,14 @@
 - All 101 tests pass with zero clippy warnings
 - Commit: aaf273b
 
+### Task 102b: Fix WebSocket Handshake Error
+- Fixed "Missing, duplicated or incorrect header sec-websocket-key" error
+- Root cause: Using `Request::builder()` directly doesn't add WebSocket headers
+- tungstenite requires `Sec-WebSocket-Key` header for WebSocket handshake
+- Solution: Use `IntoClientRequest` trait to build proper WebSocket request
+- Then add custom `Authorization` header via `headers_mut()`
+- All 101 tests pass with zero clippy warnings
+- Commit: 5cdd2a3
+
 ## Next Tasks
 - None currently - all PRD features complete
