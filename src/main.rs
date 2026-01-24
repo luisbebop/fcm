@@ -7,7 +7,6 @@ mod daemon;
 mod firecracker;
 mod git;
 mod network;
-mod session;
 mod vm;
 
 const LOGO: &str = r#"

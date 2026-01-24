@@ -2,7 +2,6 @@
 
 use crate::caddy;
 use crate::network;
-use crate::session::SessionManager;
 use crate::vm::{self, VmConfig, VmError, VmState, BASE_DIR};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -986,11 +985,10 @@ fn handle_get_vm(request: Request, vm_id: &str, access_level: &AccessLevel) -> R
 fn handle_stop_vm(
     request: Request,
     vm_id: &str,
-    session_manager: &SessionManager,
     access_level: &AccessLevel,
     console_fds: &ConsoleFds,
 ) -> Result<(), Box<dyn Error>> {
-    // Get the VM config for access check and session cleanup
+    // Get the VM config for access check
     let vm_config = match vm::find_vm(vm_id) {
         Ok(config) => config,
         Err(_) => return send_error(request, 404, &format!("VM '{}' not found", vm_id)),
@@ -1003,8 +1001,6 @@ fn handle_stop_vm(
 
     match vm::stop_vm(vm_id) {
         Ok(config) => {
-            // Clean up sessions for this VM
-            session_manager.remove_vm_sessions(&vm_config.id);
             // Close and remove the PTY master FD
             if let Some(fd) = console_fds.lock().unwrap().remove(&vm_config.id) {
                 unsafe { libc::close(fd); }
@@ -1059,11 +1055,10 @@ fn handle_start_vm(request: Request, vm_id: &str, access_level: &AccessLevel, co
 fn handle_destroy_vm(
     request: Request,
     vm_id: &str,
-    session_manager: &SessionManager,
     access_level: &AccessLevel,
     console_fds: &ConsoleFds,
 ) -> Result<(), Box<dyn Error>> {
-    // Get the VM config for access check and session cleanup
+    // Get the VM config for access check
     let vm_config = match vm::find_vm(vm_id) {
         Ok(config) => config,
         Err(_) => return send_error(request, 404, &format!("VM '{}' not found", vm_id)),
@@ -1076,8 +1071,6 @@ fn handle_destroy_vm(
 
     match vm::destroy_vm(vm_id) {
         Ok(()) => {
-            // Clean up sessions for this VM
-            session_manager.remove_vm_sessions(&vm_config.id);
             // Close and remove the PTY master FD
             if let Some(fd) = console_fds.lock().unwrap().remove(&vm_config.id) {
                 unsafe { libc::close(fd); }
@@ -1127,7 +1120,6 @@ fn handle_auth_me(request: Request) -> Result<(), Box<dyn Error>> {
 fn handle_request(
     request: Request,
     token: &str,
-    session_manager: &SessionManager,
     console_fds: &ConsoleFds,
 ) -> Result<(), Box<dyn Error>> {
     let path = request.url().to_string();
@@ -1162,7 +1154,7 @@ fn handle_request(
         (Method::Post, path) if path.starts_with("/vms/") => {
             let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
             match parts.as_slice() {
-                ["vms", vm_id, "stop"] => handle_stop_vm(request, vm_id, session_manager, &access_level, console_fds),
+                ["vms", vm_id, "stop"] => handle_stop_vm(request, vm_id, &access_level, console_fds),
                 ["vms", vm_id, "start"] => handle_start_vm(request, vm_id, &access_level, console_fds),
                 _ => send_error(request, 404, "Not found"),
             }
@@ -1170,7 +1162,7 @@ fn handle_request(
         (Method::Delete, path) if path.starts_with("/vms/") => {
             let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
             match parts.as_slice() {
-                ["vms", vm_id] => handle_destroy_vm(request, vm_id, session_manager, &access_level, console_fds),
+                ["vms", vm_id] => handle_destroy_vm(request, vm_id, &access_level, console_fds),
                 _ => send_error(request, 404, "Not found"),
             }
         }
@@ -1803,9 +1795,6 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     // Load or create auth token
     let token = load_or_create_token()?;
 
-    // Create session manager for persistent console sessions
-    let session_manager = SessionManager::new();
-
     // Create PTY FD storage for serial console
     let console_fds: ConsoleFds = Arc::new(Mutex::new(HashMap::new()));
 
@@ -1833,7 +1822,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
 
     // Handle requests
     for request in server.incoming_requests() {
-        if let Err(e) = handle_request(request, &token, &session_manager, &console_fds) {
+        if let Err(e) = handle_request(request, &token, &console_fds) {
             eprintln!("Error handling request: {}", e);
         }
     }
