@@ -891,10 +891,11 @@ fn generate_web_console_html(vm_name: &str, server_ip: &str) -> String {
         function connect() {{
             showStatus('Connecting...');
 
-            // Build WebSocket URL with session=web for web-based console
+            // Build WebSocket URL with per-VM session ID for web console
             const cols = term.cols;
             const rows = term.rows;
-            const wsUrl = `wss://${{wsHost}}/console?vm=${{encodeURIComponent(vmName)}}&cols=${{cols}}&rows=${{rows}}&session=web&env=TERM=xterm-256color`;
+            const sessionId = `web-${{vmName}}`;
+            const wsUrl = `wss://${{wsHost}}/console?vm=${{encodeURIComponent(vmName)}}&cols=${{cols}}&rows=${{rows}}&session=${{encodeURIComponent(sessionId)}}&env=TERM=xterm-256color`;
 
             ws = new WebSocket(wsUrl);
             ws.binaryType = 'arraybuffer';
