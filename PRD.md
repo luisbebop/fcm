@@ -61,8 +61,7 @@ fcm/
     ├── daemon.rs        # http server on :7777, terminal server on :7778
     ├── client.rs        # http client to daemon (with token auth)
     ├── console.rs       # terminal streaming client for console/attach
-    ├── session.rs       # session management (connect to fcm-agent in VM)
-    ├── vm.rs            # vm create/start/stop/destroy
+    ├── vm.rs            # vm create/start/stop/destroy, PTY management
     ├── firecracker.rs   # firecracker api over unix socket
     ├── network.rs       # tap device, ip allocation
     └── caddy.rs         # caddy config management
@@ -108,91 +107,58 @@ no async runtime - sync http only.
 - caddy auto-ssl via let's encrypt
 - append block to `/etc/caddy/Caddyfile`, reload
 
-## persistent console sessions
+## serial console (no agent)
 
-cli-based interactive console with persistent, detachable sessions (similar to sprites.dev):
+Uses Firecracker's built-in serial console - no agent process needed inside the VM.
 
 ### architecture
 
 ```
-┌─────────────┐         ┌─────────────┐         ┌───────────┐
-│  fcm CLI    │ ──TCP── │   Daemon    │ ──TCP── │ fcm-agent │
-│ (any host)  │  :7778  │  (proxies)  │  :7779  │   (PTY)   │
-└─────────────┘         └─────────────┘         └───────────┘
-                                                      │
-                                                    [PTY]
-                                                      │
-                                                   /bin/sh
+┌─────────────┐         ┌─────────────┐         ┌───────────────────────────────┐
+│  fcm CLI    │ ──TCP── │   Daemon    │ ──PTY── │ Firecracker stdin/stdout      │
+│ (any host)  │  :7778  │  (proxies)  │  master │ ↔ /dev/ttyS0 ↔ getty ↔ shell  │
+└─────────────┘         └─────────────┘         └───────────────────────────────┘
 ```
 
 ### how it works
 
-1. each VM runs `fcm-agent` on port 7779 (started by init)
-2. fcm-agent manages PTY sessions directly (no SSH/tmux needed)
-3. CLI connects to daemon on port 7778
-4. daemon proxies messages to fcm-agent on VM's internal IP
-5. if client disconnects, PTY session keeps running on fcm-agent
-6. client can reconnect anytime with `fcm console`
+1. Firecracker's stdin/stdout is connected to a PTY (not /dev/null)
+2. Guest kernel has `console=ttyS0` in boot args (already configured)
+3. Guest runs `getty` on `/dev/ttyS0` which provides login shell
+4. Daemon stores PTY master FD per VM
+5. CLI connects to daemon on port 7778
+6. Daemon proxies raw bytes between CLI and PTY master (no encoding!)
+7. Terminal resize uses ioctl(TIOCSWINSZ) on PTY master
 
-### session management
+### key benefits
 
-- `fcm console <vm>` - connects to VM's persistent console session
-- one session per VM (simple, no session IDs to manage)
-- session persists until VM is stopped
-- if shell exits (user types `exit`), new shell spawns automatically
+| Aspect | Before (fcm-agent) | After (serial console) |
+|--------|-------------------|------------------------|
+| Processes in VM | init, fcm-agent, shell | init, getty, shell |
+| Protocol overhead | JSON + base64 (~40 bytes/char) | None (raw bytes) |
+| Latency | 10ms polling + 50ms reconnect | Instant (select-based) |
+| Code complexity | ~800 lines (agent + session + protocol) | ~100 lines (PTY proxy) |
+| Dependencies | fcm-agent binary in rootfs | Standard getty |
 
 ### terminal protocol (port 7778)
 
-JSON framed messages (newline-delimited):
-
 ```json
-// client -> daemon: initial connect
+// client -> daemon: initial connect (JSON, newline-delimited)
 {"vm": "vm-id", "token": "auth-token", "cols": 80, "rows": 24}
 
-// daemon -> client: connect response
+// daemon -> client: connect response (JSON, newline-delimited)
 {"success": true}
 {"success": false, "error": "VM not found"}
 
-// bidirectional: terminal I/O
-{"stdin": "base64-encoded-input"}      // client -> daemon -> agent
-{"stdout": "base64-encoded-output"}    // agent -> daemon -> client
-
-// client -> daemon -> agent: resize terminal
-{"resize": {"cols": 120, "rows": 40}}
-
-// agent -> daemon -> client: shell exited (new shell spawns)
-{"exit": 0}
+// after success: raw bytes bidirectionally (no JSON, no base64!)
+// resize messages: {"resize": {"cols": 120, "rows": 40}}
 ```
-
-### fcm-agent
-
-small daemon running on each VM that manages PTY sessions:
-
-```
-fcm-agent
-├── listens on TCP :7779 (internal network only)
-├── accepts connection from daemon (172.16.0.1)
-├── spawns PTY with /bin/sh
-├── proxies stdin/stdout between TCP and PTY
-├── handles resize (SIGWINCH to PTY)
-└── respawns shell if user exits
-```
-
-protocol (TCP :7779, JSON newline-delimited):
-```json
-{"stdin": "base64data"}                // write to PTY
-{"stdout": "base64data"}               // read from PTY
-{"resize": {"cols": 80, "rows": 24}}   // resize PTY
-{"exit": 0}                            // shell exited
-```
-
-implementation: ~200 lines of Rust, ~50KB binary, no dependencies
 
 ### vm requirements
 
-- fcm-agent binary at /usr/local/bin/fcm-agent
-- fcm-agent started by init, listens on port 7779
-- no SSH/tmux required for console (SSH still used for git push)
+- getty/agetty running on /dev/ttyS0 (started by init)
+- no fcm-agent needed
+- SSH still used for git push deployment
 
 ## procfile deployment
 
@@ -257,7 +223,7 @@ remote: -----> Live at https://cosmic-nova.64-34-93-45.sslip.io
 
 create new alpine-based rootfs with:
 - dropbear (lightweight ssh server for git push deployment)
-- fcm-agent (PTY manager for console sessions)
+- agetty (for serial console login via /dev/ttyS0)
 - ruby 4.0 + bundler (latest stable: 4.0.1) for heroku-style deployments
 - python 3.14 + pip (latest stable: 3.14.2) for heroku-style deployments
 - nodejs + bun for javascript deployments
@@ -270,7 +236,7 @@ FROM alpine:edge
 
 RUN apk add --no-cache \
     dropbear dropbear-scp ruby ruby-bundler python3 py3-pip \
-    nodejs npm curl bash iproute2 rng-tools
+    nodejs npm curl bash iproute2 rng-tools agetty
 
 # Configure dropbear SSH and set root password (for git push)
 RUN mkdir -p /etc/dropbear && \
@@ -279,16 +245,12 @@ RUN mkdir -p /etc/dropbear && \
     dropbearkey -t ed25519 -f /etc/dropbear/dropbear_ed25519_host_key && \
     echo "root:root" | chpasswd
 
-# Copy fcm-agent binary (for console sessions)
-COPY fcm-agent /usr/local/bin/fcm-agent
-RUN chmod +x /usr/local/bin/fcm-agent
-
 # Copy init script
 COPY init /tmp/init
 RUN chmod +x /tmp/init && mv /tmp/init /sbin/init
 ```
 
-init script starts dropbear ssh (for git push) and fcm-agent (for console).
+init script starts dropbear ssh (for git push) and agetty on ttyS0 (for serial console).
 
 build: `docker build + docker export + dd + mkfs.ext4 + tar extract`
 
@@ -407,3 +369,155 @@ GET /cli-login?port=9876      # initiate cli login flow (redirects to oauth)
 /var/lib/firecracker/users.json   # user database and tokens
 ~/.fcm-token                       # client token (fcm_... format)
 ```
+
+## console redesign implementation plan
+
+### step 1: update VM spawn to use PTY (`src/vm.rs`)
+
+Create PTY when spawning Firecracker, store the master FD:
+
+```rust
+use std::os::unix::io::{FromRawFd, RawFd};
+
+fn spawn_firecracker(config: &VmConfig) -> Result<(Child, RawFd)> {
+    // Create a PTY for the serial console
+    let mut master_fd: RawFd = 0;
+    let slave_fd = unsafe {
+        let mut slave_fd: RawFd = 0;
+        if libc::openpty(&mut master_fd, &mut slave_fd,
+                         std::ptr::null_mut(), std::ptr::null(), std::ptr::null()) != 0 {
+            return Err(VmError::Process("Failed to create PTY".into()));
+        }
+        slave_fd
+    };
+
+    // Connect Firecracker stdin/stdout to PTY slave
+    let child = Command::new("firecracker")
+        .args(["--api-sock", socket_path.to_str().unwrap()])
+        .stdin(unsafe { Stdio::from_raw_fd(slave_fd) })
+        .stdout(unsafe { Stdio::from_raw_fd(slave_fd) })
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    // Close slave FD in parent (child has it now)
+    unsafe { libc::close(slave_fd) };
+
+    // Return master FD for console access
+    Ok((child, master_fd))
+}
+```
+
+### step 2: store PTY master FD in daemon
+
+Store in a runtime map (not VmConfig since FDs don't serialize):
+
+```rust
+// src/daemon.rs
+use once_cell::sync::Lazy;
+static CONSOLE_FDS: Lazy<Mutex<HashMap<String, RawFd>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+```
+
+### step 3: update rootfs init to run getty
+
+Update `rootfs/init` to spawn getty on ttyS0:
+
+```bash
+# Start getty on serial console for interactive login
+# Auto-login as root (no password prompt)
+setsid agetty --autologin root --noclear ttyS0 115200 vt100 &
+```
+
+### step 4: simplify daemon terminal handler
+
+Replace complex proxy with direct PTY I/O:
+
+```rust
+fn handle_terminal_connection(stream: TcpStream, console_fds: &Mutex<HashMap<String, RawFd>>) {
+    // 1. Read connect request (vm, token, cols, rows)
+    // 2. Validate token and VM
+    // 3. Get PTY master FD for this VM
+    let master_fd = console_fds.lock().unwrap().get(&vm_id).copied();
+
+    if let Some(fd) = master_fd {
+        // 4. Set terminal size on PTY
+        set_window_size(fd, cols, rows);
+
+        // 5. Send success response
+        // 6. Proxy raw bytes: stream ↔ PTY (no encoding!)
+        proxy_raw_io(stream, fd);
+    }
+}
+
+fn proxy_raw_io(mut stream: TcpStream, pty_fd: RawFd) {
+    // Simple bidirectional copy using select()
+    // No JSON, no base64, just raw bytes
+}
+```
+
+### step 5: remove fcm-agent
+
+- Delete `fcm-agent/` directory entirely
+- Remove fcm-agent from `rootfs/Dockerfile`
+- Remove fcm-agent startup from `rootfs/init`
+
+### step 6: clean up unused code
+
+Remove from codebase:
+- `src/session.rs` - no longer needed (no sessions to manage)
+- Terminal JSON protocol code in `src/daemon.rs`
+- Base64 encode/decode helpers
+
+### files to modify
+
+| File | Action | Description |
+|------|--------|-------------|
+| `src/vm.rs` | Modify | Create PTY in spawn_firecracker, return master FD |
+| `src/daemon.rs` | Simplify | Direct PTY proxy instead of fcm-agent connection |
+| `src/console.rs` | Simplify | Remove JSON message handling (already sends raw bytes!) |
+| `rootfs/init` | Modify | Add getty on ttyS0 instead of fcm-agent |
+| `rootfs/Dockerfile` | Modify | Remove fcm-agent, add agetty if needed |
+| `fcm-agent/` | **DELETE** | No longer needed |
+| `src/session.rs` | **DELETE** | No longer needed |
+
+### challenges & solutions
+
+**Challenge 1: PTY FD persistence across daemon restart**
+
+Solution: Accept that daemon restart = console disconnect (user just reconnects). The PTY FDs are stored in memory and lost on restart.
+
+**Challenge 2: Multiple clients to same console**
+
+Solution: Allow only one console client at a time (like SSH). First connection wins, subsequent connections get "console in use" error.
+
+**Challenge 3: Terminal resize**
+
+Solution: Use ioctl(TIOCSWINSZ) on master FD when client sends resize message.
+
+### verification
+
+1. Build and test:
+   ```bash
+   cargo test
+   cargo build --release
+   ```
+
+2. Rebuild rootfs (no fcm-agent):
+   ```bash
+   cd rootfs && sudo ./build.sh
+   ```
+
+3. Test console:
+   ```bash
+   fcm create
+   fcm console <vm-name>
+   # Should see getty login prompt or auto-login shell
+   # Test: typing, colors, cursor, resize
+   # Test: disconnect, reconnect
+   ```
+
+4. Verify no agent:
+   ```bash
+   # In console
+   ps aux
+   # Should NOT see fcm-agent, only: init, getty/agetty, shell
+   ```
