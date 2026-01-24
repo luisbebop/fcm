@@ -274,6 +274,7 @@ fcm auto-detects and installs dependencies:
 | `requirements.txt` | `pip install -r requirements.txt` |
 | `Gemfile` | `bundle install` |
 | `package.json` | `npm install` |
+| `bun.lockb` | `bun install` |
 
 The web process runs with `PORT=3000`.
 
@@ -293,6 +294,7 @@ Each VM gets:
 | Ruby | 34 MB | 3.4 |
 | Python | 55 MB | 3.12 |
 | Node.js | 64 MB | 24.x |
+| Bun | 90 MB | 1.3 |
 | **Build Tools** | | |
 | GCC | 21 MB | |
 | Headers | 30 MB | |
@@ -300,7 +302,7 @@ Each VM gets:
 | **Other** | | |
 | Shared libs | 15 MB | |
 | Swap file | 512 MB | |
-| **Total** | ~1 GB | |
+| **Total** | ~1.1 GB | |
 
 ## Environment Variables
 
