@@ -2072,3 +2072,31 @@
 - No tmux required - pure server-side buffering
 - All 98 tests pass with zero clippy warnings
 - Commit: b515dff
+
+### Task 116: Web Console Interface
+- Added web-based console using xterm.js for browser access
+- **Status page changes:**
+  - Added "Create VM" button (visible when logged in)
+  - Added "Actions" column to VM table
+  - Running VMs show "Console" link to open web console
+- **New routes in status server (port 7780):**
+  - GET /web-console/{vm} - serves xterm.js console page
+  - POST /api/vms - creates VM via web interface
+- **Web console features:**
+  - Full terminal emulation with xterm.js 5.3.0
+  - WebSocket connection to wss://fcm.{ip}.sslip.io/console
+  - Fixed session ID "web" for all browser sessions
+  - Auto-reconnect with exponential backoff (up to 5 attempts)
+  - Proper resize handling on window resize
+  - Dark theme matching terminal aesthetics
+- **Cookie-based auth for WebSocket:**
+  - WebSocket handler now accepts fcm_session cookie in addition to Bearer token
+  - Parses cookie from HTTP headers during WebSocket handshake
+  - Looks up user from session store and validates access
+  - Uses special token format "cookie:{user_id}:{is_admin}" internally
+- **Access control:**
+  - Web console redirects to login page if not authenticated
+  - Checks VM ownership before allowing console access
+  - Returns 404 for non-existent VMs, 503 for stopped VMs
+- All 98 tests pass with zero clippy warnings
+- Commit: b156b2f
