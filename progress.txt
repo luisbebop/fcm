@@ -1494,4 +1494,5 @@
 - Commit: 5e05c3c
 
 ## Next Tasks
-- Update existing VMs with new fcm-agent (requires rootfs rebuild or manual copy)
+- Core PRD implementation complete
+- All existing VMs destroyed (clean slate for new fcm-agent-based VMs)
