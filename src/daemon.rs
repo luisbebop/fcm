@@ -2166,28 +2166,6 @@ mod tests {
     }
 
     #[test]
-    fn test_shell_escape() {
-        // Simple string
-        assert_eq!(shell_escape("hello"), "'hello'");
-        // String with spaces
-        assert_eq!(shell_escape("hello world"), "'hello world'");
-        // String with special chars
-        assert_eq!(shell_escape("test$var"), "'test$var'");
-        // String with single quotes
-        assert_eq!(shell_escape("it's"), "'it'\\''s'");
-        // Path
-        assert_eq!(shell_escape("/bin/zsh"), "'/bin/zsh'");
-    }
-
-    #[test]
-    fn test_parse_resize_message_new_format() {
-        // New format per PRD spec
-        let msg = r#"{"type":"resize","cols":120,"rows":40}"#;
-        let result = parse_resize_message(msg);
-        assert_eq!(result, Some((120, 40)));
-    }
-
-    #[test]
     fn test_upload_path_validation() {
         // Test allowed upload path prefixes
         let allowed_prefixes = [

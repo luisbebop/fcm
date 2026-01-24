@@ -775,6 +775,7 @@ fn print_vm(vm: &VmResponse) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[test]
     fn test_token_path() {
@@ -879,12 +880,14 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_daemon_url_default() {
         env::remove_var("FCM_HOST");
         assert_eq!(daemon_url(), "http://127.0.0.1:7777");
     }
 
     #[test]
+    #[serial]
     fn test_daemon_url_from_env() {
         env::set_var("FCM_HOST", "192.168.1.100:7777");
         assert_eq!(daemon_url(), "http://192.168.1.100:7777");
@@ -892,6 +895,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_daemon_url_with_scheme() {
         env::set_var("FCM_HOST", "https://myserver.example.com:7777");
         assert_eq!(daemon_url(), "https://myserver.example.com:7777");
