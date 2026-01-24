@@ -1948,5 +1948,22 @@
   `curl -o fcm https://fcm.64-34-93-45.sslip.io/releases/fcm-macos-arm64 && chmod +x fcm`
 - All 98 tests pass with zero clippy warnings
 
+### Task 109: Fix Status Page Release Links
+- Status page showed old .tar.gz download links instead of new binary names
+- Root cause: list_releases() only recognized fcm-<commit>-<platform>.tar.gz format
+- src/daemon.rs:
+  - Updated list_releases() to recognize new format: fcm-macos-arm64, fcm-macos-x64
+  - New format binaries get commit from COMMIT file instead of filename
+  - Kept legacy .tar.gz format support for backwards compatibility
+  - Added platform display names: "macOS (Apple Silicon)", "macOS (Intel)"
+- scripts/restart-daemon.sh:
+  - Added cleanup step to remove old .tar.gz files before installing new binaries
+  - Removes fcm-*.tar.gz and old fcm-macos files
+- Status page now shows correct download links:
+  - `/releases/fcm-macos-arm64` → "macOS (Apple Silicon)"
+  - `/releases/fcm-macos-x64` → "macOS (Intel)"
+- All 98 tests pass with zero clippy warnings
+- Commit: e09ada4
+
 ## Next Tasks
 - None currently - all PRD features complete
