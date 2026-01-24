@@ -1560,5 +1560,13 @@
 - All 108 tests pass with zero warnings
 - Commit: 0d8aed7
 
+### Task 90: Fix Console PATH for Claude Code Access
+- fcm-agent was spawning `/bin/sh` (non-login shell) which didn't source /etc/profile
+- Changed to spawn `/bin/sh -l` (login shell) which sources /etc/profile
+- Login shell now has /usr/local/bin in PATH, making `claude` command work
+- Rebuilt fcm-agent and base-rootfs.img
+- All 108 tests pass with zero warnings
+- Commit: faed99d
+
 ## Next Tasks
 - Core PRD implementation complete
