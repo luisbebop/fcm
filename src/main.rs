@@ -35,15 +35,17 @@ enum Commands {
     /// List all VMs
     Ls,
     /// Open persistent console session
+    ///
+    /// Examples:
+    ///   fcm console <vm>              # Connect to VM
+    ///   fcm console <vm> -s <session> # Reconnect to existing session
+    ///   fcm console ls                # List active sessions
     Console {
-        /// VM name or ID (defaults to .fcm config)
+        /// VM name, or "ls" to list sessions
         vm: Option<String>,
-        /// Session ID to reconnect to (use 'fcm console ls' to list sessions)
+        /// Session ID to reconnect to (or VM filter when using "ls")
         #[arg(short, long)]
         session: Option<String>,
-        /// List active sessions instead of connecting
-        #[arg(long)]
-        ls: bool,
     },
     /// Stop a running VM
     Stop {
@@ -94,14 +96,12 @@ fn main() {
                 std::process::exit(1);
             }
         }
-        Some(Commands::Console { vm, session, ls }) => {
-            if ls {
-                // List sessions
-                let vm_filter = vm.as_ref().and_then(|v| {
-                    // Try to resolve VM name, but don't error if it fails (might be VM name/ID filter)
-                    client::resolve_vm_name(Some(v.clone())).ok()
-                }).or(vm);
-                if let Err(e) = client::list_sessions(vm_filter.as_deref()) {
+        Some(Commands::Console { vm, session }) => {
+            // Check if first arg is "ls" - list sessions
+            if vm.as_deref() == Some("ls") {
+                // fcm console ls [vm-filter]
+                // Session arg doubles as vm filter when listing
+                if let Err(e) = client::list_sessions(session.as_deref()) {
                     eprintln!("Error listing sessions: {}", e);
                     std::process::exit(1);
                 }

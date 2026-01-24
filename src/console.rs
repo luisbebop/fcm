@@ -526,6 +526,7 @@ pub fn connect(vm: &str, session: Option<&str>) -> Result<(), ConsoleError> {
 
     let running = Arc::new(AtomicBool::new(true));
     let running_for_ws = Arc::clone(&running);
+    let vm_name = vm.to_string();
 
     // WebSocket thread: owns the websocket, handles both read and write
     let ws_handle = thread::spawn(move || {
@@ -572,7 +573,7 @@ pub fn connect(vm: &str, session: Option<&str>) -> Result<(), ConsoleError> {
                         if let Ok(info) = serde_json::from_str::<serde_json::Value>(&text) {
                             if let Some(sid) = info["session"].as_str() {
                                 // Print session ID to stderr (visible in terminal)
-                                eprintln!("\r\x1b[KSession: {} (reconnect with: fcm console <vm> -s {})\r", sid, sid);
+                                eprintln!("\r\x1b[KSession: {} (reconnect with: fcm console {} -s {})\r", sid, vm_name, sid);
                             }
                         }
                     }

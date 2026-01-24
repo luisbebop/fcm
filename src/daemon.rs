@@ -44,19 +44,22 @@ type ConsoleSessionStore = Arc<Mutex<HashMap<String, ConsoleSession>>>;
 static CONSOLE_SESSIONS: once_cell::sync::Lazy<ConsoleSessionStore> =
     once_cell::sync::Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
 
-/// Generate a short random console session ID (6 chars)
+/// Nature-related words for session IDs
+const SESSION_WORDS: &[&str] = &[
+    "brook", "cloud", "creek", "dawn", "dew", "dusk", "fern", "fjord", "fog",
+    "frost", "glade", "grove", "haze", "hill", "lake", "leaf", "marsh", "mist",
+    "moon", "moss", "oasis", "ocean", "pine", "pond", "rain", "ridge", "sand",
+    "shade", "sky", "snow", "spring", "star", "stone", "storm", "stream", "sun",
+    "tide", "tree", "vale", "wave", "wind", "wood",
+];
+
+/// Generate a nature-word session ID (e.g., "misty-brook")
 fn generate_console_session_id() -> String {
+    use rand::seq::SliceRandom;
     let mut rng = rand::thread_rng();
-    (0..6)
-        .map(|_| {
-            let idx = rng.gen_range(0..36);
-            if idx < 10 {
-                (b'0' + idx) as char
-            } else {
-                (b'a' + idx - 10) as char
-            }
-        })
-        .collect()
+    let word1 = SESSION_WORDS.choose(&mut rng).unwrap();
+    let word2 = SESSION_WORDS.choose(&mut rng).unwrap();
+    format!("{}-{}", word1, word2)
 }
 
 /// Request to create a VM
