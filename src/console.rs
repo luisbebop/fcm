@@ -412,13 +412,17 @@ fn get_terminal_size() -> (u16, u16) {
 /// This function:
 /// 1. Connects to the daemon via WebSocket over TLS (wss://)
 /// 2. Passes auth token in HTTP header during upgrade
-/// 3. Passes VM name, terminal size in URL query params
+/// 3. Passes VM name, terminal size, optional session ID in URL query params
 /// 4. Enters raw terminal mode
 /// 5. Proxies stdin/stdout using WebSocket Binary frames
 /// 6. Restores terminal on exit
-pub fn connect(vm: &str) -> Result<(), ConsoleError> {
-    // Simple output - just show VM name, hide technical details
-    print!("Connecting to {}...", vm);
+pub fn connect(vm: &str, session: Option<&str>) -> Result<(), ConsoleError> {
+    // Simple output - just show VM name and session if reconnecting
+    if let Some(sid) = session {
+        print!("Reconnecting to {} [{}]...", vm, sid);
+    } else {
+        print!("Connecting to {}...", vm);
+    }
     io::stdout().flush()?;
 
     // Load auth token
@@ -451,6 +455,10 @@ pub fn connect(vm: &str) -> Result<(), ConsoleError> {
     }
     if let Some(l) = lang {
         url.push_str(&format!("&env=LANG={}", url_encode(&l)));
+    }
+    // Add session ID for reconnection if provided
+    if let Some(sid) = session {
+        url.push_str(&format!("&session={}", url_encode(sid)));
     }
 
     // Build WebSocket request with Authorization header
@@ -556,6 +564,17 @@ pub fn connect(vm: &str) -> Result<(), ConsoleError> {
                     let processed = process_osc_titles(&data, &mut osc_state);
                     if ws_tx.send(processed).is_err() {
                         break;
+                    }
+                }
+                Ok(Message::Text(text)) => {
+                    // Handle session info from daemon: {"session":"abc123"}
+                    if text.starts_with("{\"session\":") {
+                        if let Ok(info) = serde_json::from_str::<serde_json::Value>(&text) {
+                            if let Some(sid) = info["session"].as_str() {
+                                // Print session ID to stderr (visible in terminal)
+                                eprintln!("\r\x1b[KSession: {} (reconnect with: fcm console <vm> -s {})\r", sid, sid);
+                            }
+                        }
                     }
                 }
                 Ok(Message::Ping(data)) => {

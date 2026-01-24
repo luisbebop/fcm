@@ -22,6 +22,43 @@ use tungstenite::protocol::Message;
 /// PTY master file descriptors for console access (VM ID -> master FD)
 type ConsoleFds = Arc<Mutex<HashMap<String, RawFd>>>;
 
+/// Persistent console session - keeps SSH connection alive across WebSocket reconnects
+struct ConsoleSession {
+    id: String,
+    vm_id: String,
+    vm_name: String,
+    vm_ip: String,
+    created_at: u64,
+    /// Send bytes to SSH stdin
+    input_tx: std::sync::mpsc::Sender<Vec<u8>>,
+    /// Subscribers for SSH stdout (each connected WebSocket gets one)
+    output_subscribers: Arc<Mutex<Vec<std::sync::mpsc::Sender<Vec<u8>>>>>,
+    /// SSH process (kept alive for session duration)
+    _ssh_child: std::process::Child,
+}
+
+/// Console session storage (session ID -> session)
+type ConsoleSessionStore = Arc<Mutex<HashMap<String, ConsoleSession>>>;
+
+/// Global console session store
+static CONSOLE_SESSIONS: once_cell::sync::Lazy<ConsoleSessionStore> =
+    once_cell::sync::Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
+
+/// Generate a short random console session ID (6 chars)
+fn generate_console_session_id() -> String {
+    let mut rng = rand::thread_rng();
+    (0..6)
+        .map(|_| {
+            let idx = rng.gen_range(0..36);
+            if idx < 10 {
+                (b'0' + idx) as char
+            } else {
+                (b'a' + idx - 10) as char
+            }
+        })
+        .collect()
+}
+
 /// Request to create a VM
 #[derive(Debug, Deserialize, Default)]
 struct CreateVmRequest {
@@ -1301,9 +1338,13 @@ fn handle_request(
 struct WsConsoleRequest {
     vm: String,
     token: String,
+    #[allow(dead_code)]
     cols: u16,
+    #[allow(dead_code)]
     rows: u16,
     env: HashMap<String, String>,
+    /// Optional session ID to reconnect to existing session
+    session: Option<String>,
 }
 
 /// Parse query string into params, handling repeated keys for env vars
@@ -1383,6 +1424,9 @@ fn handle_terminal_connection(
             env.insert(k, v);
         }
 
+        // Extract optional session ID for reconnection
+        let session = params.get("session").cloned().filter(|s| !s.is_empty());
+
         // Validate token
         let request_token = bearer_token.unwrap_or_default();
         if request_token.is_empty() {
@@ -1399,6 +1443,7 @@ fn handle_terminal_connection(
             cols,
             rows,
             env,
+            session,
         });
 
         Ok(response)
@@ -1422,7 +1467,7 @@ fn handle_terminal_connection(
         }
     };
 
-    println!("WebSocket console connection: vm={}", request.vm);
+    println!("WebSocket console connection: vm={}, session={:?}", request.vm, request.session);
 
     // Validate token and get access level
     let access_level = if request.token == token_copy {
@@ -1468,101 +1513,173 @@ fn handle_terminal_connection(
         return;
     }
 
-    eprintln!("Starting SSH session to VM {} at {}", request.vm, vm_ip);
-
-    // Build environment variables for SSH
-    let mut env_args = Vec::new();
-    for (key, value) in &request.env {
-        if key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !key.is_empty() {
-            env_args.push(format!("{}={}", key, value));
-        }
-    }
-
-    // Spawn SSH to VM with PTY allocation
-    // Use sshpass with password "root" (VMs are configured this way)
-    let mut ssh_cmd = std::process::Command::new("sshpass");
-    ssh_cmd
-        .arg("-p").arg("root")
-        .arg("ssh")
-        .arg("-tt") // Force PTY allocation
-        .arg("-o").arg("StrictHostKeyChecking=no")
-        .arg("-o").arg("UserKnownHostsFile=/dev/null")
-        .arg("-o").arg("LogLevel=ERROR")
-        .arg(format!("root@{}", vm_ip));
-
-    // Add environment setup and shell command
-    // Use zsh --login to source /etc/zsh/zprofile which sets PATH
-    let shell_cmd = if env_args.is_empty() {
-        "exec zsh --login".to_string()
-    } else {
-        format!("export {}; exec zsh --login", env_args.join(" "))
-    };
-    ssh_cmd.arg(shell_cmd);
-
-    // Set up pipes for stdin/stdout
-    ssh_cmd.stdin(std::process::Stdio::piped());
-    ssh_cmd.stdout(std::process::Stdio::piped());
-    ssh_cmd.stderr(std::process::Stdio::piped());
-
-    let mut child = match ssh_cmd.spawn() {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("Failed to spawn SSH: {}", e);
+    // Get or create session
+    let (session_id, input_tx, output_subscribers) = if let Some(sid) = request.session {
+        // Reconnect to existing session
+        let sessions = CONSOLE_SESSIONS.lock().unwrap();
+        if let Some(session) = sessions.get(&sid) {
+            if session.vm_id != config.id {
+                eprintln!("Session {} belongs to different VM", sid);
+                return;
+            }
+            eprintln!("Reconnecting to session {} for VM {}", sid, request.vm);
+            (sid.clone(), session.input_tx.clone(), Arc::clone(&session.output_subscribers))
+        } else {
+            eprintln!("Session {} not found", sid);
             return;
         }
+    } else {
+        // Create new session
+        let session_id = generate_console_session_id();
+        eprintln!("Creating new session {} for VM {} at {}", session_id, request.vm, vm_ip);
+
+        // Build environment variables for SSH
+        let mut env_args = Vec::new();
+        for (key, value) in &request.env {
+            if key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !key.is_empty() {
+                env_args.push(format!("{}={}", key, value));
+            }
+        }
+
+        // Spawn SSH to VM with PTY allocation
+        let mut ssh_cmd = std::process::Command::new("sshpass");
+        ssh_cmd
+            .arg("-p").arg("root")
+            .arg("ssh")
+            .arg("-tt")
+            .arg("-o").arg("StrictHostKeyChecking=no")
+            .arg("-o").arg("UserKnownHostsFile=/dev/null")
+            .arg("-o").arg("LogLevel=ERROR")
+            .arg(format!("root@{}", vm_ip));
+
+        let shell_cmd = if env_args.is_empty() {
+            "exec zsh --login".to_string()
+        } else {
+            format!("export {}; exec zsh --login", env_args.join(" "))
+        };
+        ssh_cmd.arg(shell_cmd);
+
+        ssh_cmd.stdin(std::process::Stdio::piped());
+        ssh_cmd.stdout(std::process::Stdio::piped());
+        ssh_cmd.stderr(std::process::Stdio::piped());
+
+        let mut child = match ssh_cmd.spawn() {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("Failed to spawn SSH: {}", e);
+                return;
+            }
+        };
+
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+
+        // Create channels for input (to SSH stdin)
+        let (input_tx, input_rx) = std::sync::mpsc::channel::<Vec<u8>>();
+
+        // Create output subscribers list
+        let output_subscribers: Arc<Mutex<Vec<std::sync::mpsc::Sender<Vec<u8>>>>> =
+            Arc::new(Mutex::new(Vec::new()));
+
+        // Start SSH stdin writer thread
+        let input_rx_for_writer = input_rx;
+        let mut stdin_writer = stdin;
+        thread::spawn(move || {
+            use std::io::Write;
+            while let Ok(data) = input_rx_for_writer.recv() {
+                if stdin_writer.write_all(&data).is_err() {
+                    break;
+                }
+                let _ = stdin_writer.flush();
+            }
+        });
+
+        // Start SSH stdout reader thread that broadcasts to subscribers
+        let output_subs_for_reader = Arc::clone(&output_subscribers);
+        let mut stdout_reader = stdout;
+        thread::spawn(move || {
+            use std::io::Read;
+            let mut buf = [0u8; 4096];
+            loop {
+                match stdout_reader.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        let data = buf[..n].to_vec();
+                        let subs = output_subs_for_reader.lock().unwrap();
+                        // Send to all subscribers, remove dead ones
+                        let mut to_remove = Vec::new();
+                        for (i, tx) in subs.iter().enumerate() {
+                            if tx.send(data.clone()).is_err() {
+                                to_remove.push(i);
+                            }
+                        }
+                        drop(subs);
+                        // Clean up dead subscribers
+                        if !to_remove.is_empty() {
+                            let mut subs = output_subs_for_reader.lock().unwrap();
+                            for i in to_remove.into_iter().rev() {
+                                if i < subs.len() {
+                                    subs.remove(i);
+                                }
+                            }
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        // Store session
+        let session = ConsoleSession {
+            id: session_id.clone(),
+            vm_id: config.id.clone(),
+            vm_name: config.name.clone(),
+            vm_ip: vm_ip.clone(),
+            created_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            input_tx: input_tx.clone(),
+            output_subscribers: Arc::clone(&output_subscribers),
+            _ssh_child: child,
+        };
+
+        CONSOLE_SESSIONS.lock().unwrap().insert(session_id.clone(), session);
+        (session_id, input_tx, output_subscribers)
     };
 
-    let stdin = child.stdin.take().unwrap();
-    let stdout = child.stdout.take().unwrap();
-
-    // Proxy WebSocket to SSH
-    eprintln!("Starting WebSocket-SSH proxy for VM {}", request.vm);
-    proxy_websocket_ssh(websocket, stdin, stdout, &config.name, request.cols, request.rows);
-
-    // Kill SSH process when done
-    let _ = child.kill();
-    let _ = child.wait();
-    eprintln!("WebSocket-SSH proxy ended");
+    // Attach WebSocket to session
+    eprintln!("Attaching WebSocket to session {}", session_id);
+    proxy_websocket_session(websocket, &session_id, &config.name, input_tx, output_subscribers);
+    eprintln!("WebSocket disconnected from session {}", session_id);
 }
 
 
-/// Proxy WebSocket messages to/from SSH process
-/// Simple approach: just pipe stdin/stdout between WebSocket and SSH
-fn proxy_websocket_ssh(
+/// Proxy WebSocket to a persistent console session
+/// Uses channels to communicate with the session's SSH process
+fn proxy_websocket_session(
     mut websocket: tungstenite::WebSocket<TcpStream>,
-    mut ssh_stdin: std::process::ChildStdin,
-    ssh_stdout: std::process::ChildStdout,
+    session_id: &str,
     vm_name: &str,
-    _cols: u16,
-    _rows: u16,
+    input_tx: std::sync::mpsc::Sender<Vec<u8>>,
+    output_subscribers: Arc<Mutex<Vec<std::sync::mpsc::Sender<Vec<u8>>>>>,
 ) {
-    use std::io::{Read, Write};
     use std::sync::mpsc;
 
-    // Send initial OSC title
-    let title = format!("\x1b]0;fcm: {}\x07", vm_name);
-    let _ = websocket.send(Message::Binary(title.into_bytes()));
+    // Send session ID and OSC title to client
+    let session_msg = format!("\x1b]0;fcm: {} [{}]\x07", vm_name, session_id);
+    let _ = websocket.send(Message::Binary(session_msg.into_bytes()));
+
+    // Send session ID as text message so client can save it
+    let session_info = format!("{{\"session\":\"{}\"}}", session_id);
+    let _ = websocket.send(Message::Text(session_info));
     let _ = websocket.flush();
 
-    // Channel for stdout reader to send data
-    let (tx, rx) = mpsc::channel::<Vec<u8>>();
+    // Create output channel for this WebSocket
+    let (output_tx, output_rx) = mpsc::channel::<Vec<u8>>();
 
-    // Spawn thread to read from SSH stdout
-    let mut stdout = ssh_stdout;
-    let reader_handle = thread::spawn(move || {
-        let mut buf = [0u8; 4096];
-        loop {
-            match stdout.read(&mut buf) {
-                Ok(0) => break, // EOF
-                Ok(n) => {
-                    if tx.send(buf[..n].to_vec()).is_err() {
-                        break;
-                    }
-                }
-                Err(_) => break,
-            }
-        }
-    });
+    // Subscribe to session output
+    output_subscribers.lock().unwrap().push(output_tx);
 
     // Set WebSocket to non-blocking for polling
     let ws_fd = websocket.get_ref().as_raw_fd();
@@ -1571,10 +1688,10 @@ fn proxy_websocket_ssh(
         libc::fcntl(ws_fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
     }
 
-    // Main loop: check for data from both WebSocket and SSH stdout
+    // Main loop: proxy between WebSocket and session channels
     loop {
-        // Check for data from SSH stdout (via channel)
-        match rx.try_recv() {
+        // Check for data from session (SSH stdout via broadcast)
+        match output_rx.try_recv() {
             Ok(data) => {
                 if websocket.send(Message::Binary(data)).is_err() {
                     break;
@@ -1585,13 +1702,12 @@ fn proxy_websocket_ssh(
             Err(mpsc::TryRecvError::Empty) => {}
         }
 
-        // Check for data from WebSocket
+        // Check for data from WebSocket (user input)
         match websocket.read() {
             Ok(Message::Binary(data)) => {
-                if ssh_stdin.write_all(&data).is_err() {
+                if input_tx.send(data).is_err() {
                     break;
                 }
-                let _ = ssh_stdin.flush();
             }
             Ok(Message::Text(_text)) => {
                 // Resize messages ignored - SSH handles terminal size via PTY
@@ -1602,16 +1718,14 @@ fn proxy_websocket_ssh(
             }
             Ok(_) => {}
             Err(tungstenite::Error::Io(ref e)) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                // No data available, brief sleep to avoid busy-loop
                 thread::sleep(std::time::Duration::from_millis(5));
             }
             Err(_) => break,
         }
     }
 
-    // Clean up
-    drop(ssh_stdin);
-    let _ = reader_handle.join();
+    // Note: We don't remove ourselves from output_subscribers here
+    // The reader thread will clean up dead subscribers automatically
 }
 
 /// Parse HTTP request and extract method, path, headers
@@ -1872,6 +1986,53 @@ fn run_status_server(stats: Arc<DaemonStats>, sessions: SessionStore) {
                     let cookie = "fcm_session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0";
                     send_redirect(&mut stream, &base_url, Some(cookie));
                     return;
+                }
+
+                // List console sessions (JSON API)
+                if path == "/sessions" || path.starts_with("/sessions?") {
+                    // Parse query params for optional VM filter
+                    let query = path.split_once('?').map(|(_, q)| q).unwrap_or("");
+                    let params = parse_query_string(query);
+                    let vm_filter = params.get("vm");
+
+                    let sessions = CONSOLE_SESSIONS.lock().unwrap();
+                    let session_list: Vec<serde_json::Value> = sessions
+                        .values()
+                        .filter(|s| vm_filter.is_none() || vm_filter == Some(&s.vm_name) || vm_filter == Some(&s.vm_id))
+                        .map(|s| {
+                            serde_json::json!({
+                                "id": s.id,
+                                "vm_id": s.vm_id,
+                                "vm_name": s.vm_name,
+                                "vm_ip": s.vm_ip,
+                                "created_at": s.created_at,
+                            })
+                        })
+                        .collect();
+
+                    let json = serde_json::to_string(&session_list).unwrap_or_else(|_| "[]".to_string());
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        json.len(),
+                        json
+                    );
+                    let _ = stream.write_all(response.as_bytes());
+                    return;
+                }
+
+                // Delete a console session
+                if let Some(session_id) = path.strip_prefix("/sessions/") {
+                    if method == "DELETE" {
+                        let mut sessions = CONSOLE_SESSIONS.lock().unwrap();
+                        if sessions.remove(session_id).is_some() {
+                            let response = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                            let _ = stream.write_all(response.as_bytes());
+                        } else {
+                            let response = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                            let _ = stream.write_all(response.as_bytes());
+                        }
+                        return;
+                    }
                 }
 
                 // Serve release files

@@ -38,6 +38,12 @@ enum Commands {
     Console {
         /// VM name or ID (defaults to .fcm config)
         vm: Option<String>,
+        /// Session ID to reconnect to (use 'fcm console ls' to list sessions)
+        #[arg(short, long)]
+        session: Option<String>,
+        /// List active sessions instead of connecting
+        #[arg(long)]
+        ls: bool,
     },
     /// Stop a running VM
     Stop {
@@ -88,17 +94,29 @@ fn main() {
                 std::process::exit(1);
             }
         }
-        Some(Commands::Console { vm }) => {
-            let vm_name = match client::resolve_vm_name(vm) {
-                Ok(name) => name,
-                Err(e) => {
-                    eprintln!("Error: {}", e);
+        Some(Commands::Console { vm, session, ls }) => {
+            if ls {
+                // List sessions
+                let vm_filter = vm.as_ref().and_then(|v| {
+                    // Try to resolve VM name, but don't error if it fails (might be VM name/ID filter)
+                    client::resolve_vm_name(Some(v.clone())).ok()
+                }).or(vm);
+                if let Err(e) = client::list_sessions(vm_filter.as_deref()) {
+                    eprintln!("Error listing sessions: {}", e);
                     std::process::exit(1);
                 }
-            };
-            if let Err(e) = client::console_vm(&vm_name) {
-                eprintln!("Error opening console: {}", e);
-                std::process::exit(1);
+            } else {
+                let vm_name = match client::resolve_vm_name(vm) {
+                    Ok(name) => name,
+                    Err(e) => {
+                        eprintln!("Error: {}", e);
+                        std::process::exit(1);
+                    }
+                };
+                if let Err(e) = client::console_vm(&vm_name, session.as_deref()) {
+                    eprintln!("Error opening console: {}", e);
+                    std::process::exit(1);
+                }
             }
         }
         Some(Commands::Stop { vm }) => {

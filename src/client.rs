@@ -35,6 +35,25 @@ fn daemon_url() -> String {
     }
 }
 
+/// Get the status page URL (used for sessions API)
+/// This is the fcm.{ip}.sslip.io URL that Caddy proxies
+fn status_url() -> String {
+    if let Ok(host) = env::var("FCM_HOST") {
+        // Extract hostname from FCM_HOST (remove scheme and port)
+        let host = host
+            .trim_start_matches("http://")
+            .trim_start_matches("https://");
+        let hostname = host.split(':').next().unwrap_or(host);
+
+        // Replace dots with dashes for sslip.io format
+        let ip_dashed = hostname.replace('.', "-");
+        format!("https://fcm.{}.sslip.io", ip_dashed)
+    } else {
+        // Local development - use localhost status server
+        "http://127.0.0.1:7780".to_string()
+    }
+}
+
 /// Get the path to the local config file (.fcm in current directory)
 fn local_config_path() -> PathBuf {
     PathBuf::from(LOCAL_CONFIG_FILE)
@@ -750,10 +769,71 @@ pub fn whoami() -> Result<(), Box<dyn Error>> {
 }
 
 /// Open a persistent console session on a VM
-pub fn console_vm(vm: &str) -> Result<(), Box<dyn Error>> {
+pub fn console_vm(vm: &str, session: Option<&str>) -> Result<(), Box<dyn Error>> {
     // Connect directly via the terminal streaming protocol
-    // Daemon will auto-create/reuse the session internally
-    console::connect(vm).map_err(|e| e.to_string())?;
+    // If session is provided, reconnect to that session
+    console::connect(vm, session).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// List active console sessions
+pub fn list_sessions(vm_filter: Option<&str>) -> Result<(), Box<dyn Error>> {
+    let url = if let Some(vm) = vm_filter {
+        format!("{}/sessions?vm={}", status_url(), vm)
+    } else {
+        format!("{}/sessions", status_url())
+    };
+
+    let token = load_token()?;
+    let response = ureq::get(&url)
+        .set("Authorization", &format!("Bearer {}", token))
+        .call()
+        .map_err(|e| format!("Failed to list sessions: {}", e))?;
+
+    let sessions: Vec<serde_json::Value> = response
+        .into_json()
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+
+    if sessions.is_empty() {
+        println!("No active sessions");
+        return Ok(());
+    }
+
+    println!("{:<8} {:<20} {:<15} {:<20}", "ID", "VM", "IP", "CREATED");
+    println!("{}", "-".repeat(65));
+
+    for session in sessions {
+        let id = session["id"].as_str().unwrap_or("-");
+        let vm_name = session["vm_name"].as_str().unwrap_or("-");
+        let vm_ip = session["vm_ip"].as_str().unwrap_or("-");
+        let created_at = session["created_at"].as_u64().unwrap_or(0);
+
+        // Format timestamp
+        let created_str = if created_at > 0 {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let ago = now.saturating_sub(created_at);
+            if ago < 60 {
+                format!("{}s ago", ago)
+            } else if ago < 3600 {
+                format!("{}m ago", ago / 60)
+            } else if ago < 86400 {
+                format!("{}h ago", ago / 3600)
+            } else {
+                format!("{}d ago", ago / 86400)
+            }
+        } else {
+            "-".to_string()
+        };
+
+        println!("{:<8} {:<20} {:<15} {:<20}", id, vm_name, vm_ip, created_str);
+    }
+
+    println!();
+    println!("Reconnect with: fcm console <vm> --session <id>");
+
     Ok(())
 }
 
