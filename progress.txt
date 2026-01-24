@@ -1536,5 +1536,14 @@
 - All 108 tests pass with zero clippy warnings
 - Commit: 7086e9f
 
+### Task 88: Clean Up Old Releases in Build Script
+- Updated build-release.sh to delete old releases before creating new ones
+- Keeps only one release per platform (1 linux, 1 mac) in releases directory
+- Added rm -f commands to delete fcm-*-linux-x86_64.tar.gz and fcm-*-darwin-arm64.tar.gz
+- Prevents accumulation of old versioned tarballs
+- Tested: releases directory went from 18 files to 2 after running script
+- All 108 tests pass with zero warnings
+- Commit: 31a8cf0
+
 ## Next Tasks
 - Core PRD implementation complete
