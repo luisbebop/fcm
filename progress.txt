@@ -2008,3 +2008,31 @@
 
 ## Next Tasks
 - None currently - all PRD features complete
+
+### Task 113: Persistent Console Sessions with Reconnection
+- Added ability to reconnect to existing console sessions after disconnection
+- SSH sessions now persist in daemon even when WebSocket disconnects
+- **New ConsoleSession struct** (daemon.rs):
+  - Stores session ID, VM info, SSH process, input/output channels
+  - Sessions tracked in global `CONSOLE_SESSIONS` store (using once_cell::Lazy)
+  - Reader thread broadcasts SSH stdout to all subscribed WebSockets
+  - Writer thread receives from channel, writes to SSH stdin
+- **CLI changes** (main.rs):
+  - `fcm console --ls` - list active sessions
+  - `fcm console <vm> -s <session-id>` - reconnect to existing session
+- **Client changes** (client.rs):
+  - New `list_sessions()` function to fetch sessions from API
+  - `console_vm()` now accepts optional session ID
+  - Added `status_url()` function for status server API calls
+- **Daemon changes** (daemon.rs):
+  - GET /sessions endpoint - returns JSON list of active sessions
+  - Supports optional `?vm=` filter to list sessions for specific VM
+  - Session info sent to client as Text frame on connect: `{"session":"id"}`
+  - Session ID displayed in terminal title via OSC sequence
+- **Console changes** (console.rs):
+  - `connect()` now accepts optional session ID
+  - Passes session ID in WebSocket URL query params
+  - Displays session ID on connect with reconnection hint
+- Added once_cell dependency (Cargo.toml)
+- All 98 tests pass with zero clippy warnings
+- Commit: 8e1391d
