@@ -1471,10 +1471,11 @@ fn handle_terminal_connection(
         .arg(format!("root@{}", vm_ip));
 
     // Add environment setup and shell command
+    // Use zsh --login to source /etc/zsh/zprofile which sets PATH
     let shell_cmd = if env_args.is_empty() {
-        "exec zsh".to_string()
+        "exec zsh --login".to_string()
     } else {
-        format!("export {}; exec zsh", env_args.join(" "))
+        format!("export {}; exec zsh --login", env_args.join(" "))
     };
     ssh_cmd.arg(shell_cmd);
 
