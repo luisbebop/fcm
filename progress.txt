@@ -1935,5 +1935,18 @@
 - All 98 tests pass with zero clippy warnings
 - Commits: 0090dd2, 8effb8b, c52df24, c1491e6
 
+### Task 108: Rebuild macOS Client Binaries for WebSocket Console
+- User reported console connection error: "Cannot connect to terminal server at 64.34.93.45:7778"
+- Root cause: User's fcm client was from before Task 99 (WebSocket migration)
+- Old client tried to connect directly to TCP port 7778 (now localhost-only)
+- New client uses WebSocket over TLS via Caddy on port 443
+- Actions:
+  - Ran scripts/restart-daemon.sh to rebuild all binaries
+  - Verified releases serve correctly via https://fcm.64-34-93-45.sslip.io/releases/
+  - Updated COMMIT file with latest commit: abc2912
+- User needs to download updated client:
+  `curl -o fcm https://fcm.64-34-93-45.sslip.io/releases/fcm-macos-arm64 && chmod +x fcm`
+- All 98 tests pass with zero clippy warnings
+
 ## Next Tasks
 - None currently - all PRD features complete
