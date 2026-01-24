@@ -1595,6 +1595,21 @@
 - Follow-up: Also send clear screen sequence to client in daemon before proxy starts
 - Clear screen (ESC[2J ESC[H) gives TUI app a clean slate to redraw into
 - Commit: d51835e
+- Follow-up: Simplified to minimal interference approach (see Task 93)
+
+### Task 93: Minimal Interference Console Reconnect
+- Simplified console reconnect to only use SIGWINCH signal
+- Removed Ctrl+L injection in fcm-agent (was causing issues with some apps)
+- Removed clear screen sequence in daemon.rs (interfered with raw terminal stream)
+- Let SIGWINCH be the only signal to apps about terminal changes
+- fcm-agent/src/main.rs:
+  - Removed Ctrl+L write and 50ms delay on reconnect
+  - Just log "Reconnect: SIGWINCH sent, no character injection"
+- src/daemon.rs:
+  - Removed clear screen (\x1b[2J\x1b[H) write before proxy starts
+- Minimal interference approach works better with variety of terminal apps
+- All 108 tests pass with zero warnings
+- Commit: 9dac2ff
 
 ## Next Tasks
 - Core PRD implementation complete
