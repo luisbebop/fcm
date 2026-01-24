@@ -76,7 +76,9 @@ log ">>> init: ssh launched (step 2)"
 
 # Start zsh login shell on serial console (ttyS0) for interactive access
 # This provides a direct shell without getty overhead
+# Set PATH explicitly to include /usr/local/bin (for bun, claude, etc.)
 log ">>> init: starting zsh on ttyS0"
+export PATH="/usr/local/bin:$PATH"
 setsid sh -c 'exec zsh --login' <>/dev/ttyS0 >&0 2>&1 &
 
 # Create /app directory for Procfile deployments
