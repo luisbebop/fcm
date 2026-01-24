@@ -1426,6 +1426,23 @@
 - All 110 tests pass with zero clippy warnings
 - Commit: bee74d1
 
+### Task 82: Show Shell Exit Notification in Console Sessions
+- Added shell exit handling to console sessions
+- When user types `exit` in console, fcm-agent sends {"exit":N} message
+- Previously daemon ignored exit messages (shell respawns automatically on agent)
+- Now daemon detects exit messages and sends user-friendly notification to client
+- Notification: "[Shell exited (code N), new shell spawned]" displayed in gray
+- src/daemon.rs:
+  - Added extract_exit_code to imports from session module
+  - Updated proxy_agent_io() to detect {"exit":N} messages
+  - Send ANSI-formatted notification to client (gray text with \x1b[90m)
+- src/session.rs:
+  - Removed #[allow(dead_code)] from extract_exit_code() (now used)
+  - Removed #[allow(dead_code)] from extract_json_number() (transitively used)
+- User experience: console stays connected after exit, new shell prompt appears
+- All 110 tests pass with zero clippy warnings
+- Commit: 706e48c
+
 ## Next Tasks
 - Test console functionality more thoroughly (interactive usage)
 - Rebuild base rootfs with fcm-agent for existing VMs
