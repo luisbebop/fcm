@@ -5,8 +5,10 @@ set -e
 
 cd /home/ubuntu/fcm
 
-# Ensure cargo is in PATH (for zigbuild)
+# Ensure cargo/rustup environment is set up
 export PATH="/home/ubuntu/.cargo/bin:$PATH"
+export RUSTUP_HOME="/home/ubuntu/.rustup"
+export CARGO_HOME="/home/ubuntu/.cargo"
 
 echo "==> Stopping daemon..."
 sudo pkill -f 'fcm daemon' 2>/dev/null || true
