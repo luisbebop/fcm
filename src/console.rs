@@ -430,11 +430,9 @@ pub fn connect(vm: &str) -> Result<(), ConsoleError> {
     let colorterm = env::var("COLORTERM").ok();
     let lang = env::var("LANG").ok();
 
-    // Optional: Upload terminfo to VM for better terminal compatibility
-    // This is best-effort - if it fails, we continue anyway
-    if env::var("FCM_UPLOAD_TERMINFO").map(|v| v == "1").unwrap_or(false) {
-        let _ = upload_terminfo(vm, &term);
-    }
+    // Upload terminfo to VM for better terminal compatibility
+    // Best-effort - if it fails, we continue anyway
+    let _ = upload_terminfo(vm, &term);
 
     // Build WebSocket URL with query params
     let base_url = get_websocket_url_base();
