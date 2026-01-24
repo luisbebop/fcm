@@ -98,9 +98,10 @@ fn spawn_shell() -> (RawFd, libc::pid_t) {
     let pid = unsafe {
         let pid = libc::forkpty(&mut master_fd, std::ptr::null_mut(), std::ptr::null(), std::ptr::null());
         if pid == 0 {
-            // Child process - exec shell
+            // Child process - exec login shell (sources /etc/profile for PATH)
             let shell = std::ffi::CString::new("/bin/sh").unwrap();
-            let args = [shell.as_ptr(), std::ptr::null()];
+            let login_flag = std::ffi::CString::new("-l").unwrap();
+            let args = [shell.as_ptr(), login_flag.as_ptr(), std::ptr::null()];
             libc::execvp(shell.as_ptr(), args.as_ptr());
             libc::_exit(1);
         }
