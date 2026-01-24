@@ -1521,5 +1521,20 @@
 - All 108 tests pass with zero clippy warnings
 - Commit: 86eed53
 
+### Task 87: Fix Console Reconnect Hanging Issue
+- Fixed issue where second console connection would not receive shell output
+- Problem: When client disconnects, daemon's reader thread blocks on read_line()
+  from fcm-agent forever, holding fcm-agent's CONNECTION_LOCK
+- This prevented new connections from getting any shell output
+- Root cause: fcm-agent keeps shell alive (persistent session), never closes
+  its connection, so daemon's reader thread never gets EOF
+- Solution: Shutdown the agent connection when client disconnects
+- src/daemon.rs:
+  - Added `agent_write.shutdown(std::net::Shutdown::Both)` before join()
+  - This signals fcm-agent that connection is closed, unblocking reader
+- Tested: Multiple consecutive reconnections now work correctly
+- All 108 tests pass with zero clippy warnings
+- Commit: 7086e9f
+
 ## Next Tasks
 - Core PRD implementation complete
