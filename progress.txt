@@ -2108,3 +2108,12 @@
 - Previously: Code returned "Session web not found" and connection closed
 - Now: Creates session with specified ID (e.g., "web") on first connect
 - Commit: 02e447b
+
+### Task 116c: Fix Web Console Per-VM Session IDs
+- Fixed issue where web console only worked for the first VM opened
+- Root cause: All VMs shared global session ID "web"
+- When opening console for a different VM, it failed with "Session web belongs to different VM"
+- Fix: Changed session ID format from "web" to "web-{vmName}"
+- Now each VM has its own web session (e.g., "web-atomic-comet", "web-nebula-vertex")
+- Multiple VMs can have active web console sessions simultaneously
+- Commit: 0b6f726
