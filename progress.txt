@@ -1368,7 +1368,35 @@
 - All 103 tests pass with zero warnings
 - Commit: ef11ac4
 
+### Task 80: Update session.rs to Connect to fcm-agent Instead of SSH+tmux
+- Rewrote session.rs to use TCP connection to fcm-agent on port 7779
+- Removed SSH+tmux session management (fcm-agent handles PTY directly)
+- Added JSON protocol helpers:
+  - base64_encode() and base64_decode() for terminal I/O
+  - extract_stdout(), extract_stdin(), extract_exit_code() for JSON parsing
+  - make_stdin_message() and make_resize_message() for message creation
+- Added connect_to_agent() function to establish TCP connection to VM:7779
+- Added send_resize() to send initial terminal size
+- Added AgentConnection wrapper struct for convenience
+- Updated SessionError variants:
+  - Removed SshError and TmuxError (no longer using SSH/tmux)
+  - Added ConnectionFailed for agent connection errors
+- Updated SessionInfo struct:
+  - Renamed tmux_session field to session_name
+- Updated daemon.rs terminal handler (handle_terminal_connection):
+  - Connect to fcm-agent instead of spawning SSH+tmux
+  - New proxy_agent_io() function for JSON message proxying
+  - Client sends raw bytes, daemon encodes to {"stdin":"base64"}
+  - Agent sends {"stdout":"base64"}, daemon decodes and sends raw bytes to client
+- Updated client.rs SessionResponse to match new field name (session_name)
+- Rebuilt base rootfs image with fcm-agent
+- Tested console connection successfully:
+  - Daemon connects to fcm-agent on VM port 7779
+  - JSON protocol works correctly (resize, stdin, stdout)
+  - Console command connects and receives shell prompt
+- All 109 tests pass with zero clippy warnings
+- Commit: 61456d3
+
 ## Next Tasks
-- Update session.rs to connect to fcm-agent instead of SSH+tmux
-- Update daemon.rs terminal server for new protocol
-- Rebuild base rootfs image with fcm-agent
+- Test console functionality more thoroughly (interactive usage)
+- Consider adding terminal resize handling during session
