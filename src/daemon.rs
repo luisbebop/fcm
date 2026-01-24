@@ -523,10 +523,10 @@ fn generate_status_html(stats: &DaemonStats, user: Option<&UserRecord>) -> Strin
     // Build VM table rows
     let vm_rows: String = match &user {
         None => {
-            "<tr><td colspan=\"4\" style=\"text-align:center;color:#666;\">Login to see your VMs</td></tr>".to_string()
+            "<tr><td colspan=\"5\" style=\"text-align:center;color:#666;\">Login to see your VMs</td></tr>".to_string()
         }
         Some(_) if vms.is_empty() => {
-            "<tr><td colspan=\"4\" style=\"text-align:center;color:#666;\">No VMs yet</td></tr>".to_string()
+            "<tr><td colspan=\"5\" style=\"text-align:center;color:#666;\">No VMs yet</td></tr>".to_string()
         }
         Some(_) => {
             vms.iter()
@@ -536,9 +536,14 @@ fn generate_status_html(stats: &DaemonStats, user: Option<&UserRecord>) -> Strin
                     let domain_html = v.expose.as_ref()
                         .map(|e| format!("<a href=\"https://{}\" target=\"_blank\">{}</a>", e.domain, e.domain))
                         .unwrap_or_else(|| "-".to_string());
+                    let console_html = if v.state == VmState::Running {
+                        format!(r#"<a href="/web-console/{}" style="color:#06c;">Console</a>"#, v.name)
+                    } else {
+                        "-".to_string()
+                    };
                     format!(
-                        "<tr><td>{}</td><td style=\"color:{}\">{}</td><td>{}</td><td>{}MB</td></tr>",
-                        v.name, state_color, state_text, domain_html, v.disk_used_mb()
+                        "<tr><td>{}</td><td style=\"color:{}\">{}</td><td>{}</td><td>{}MB</td><td>{}</td></tr>",
+                        v.name, state_color, state_text, domain_html, v.disk_used_mb(), console_html
                     )
                 })
                 .collect()
@@ -559,6 +564,34 @@ fn generate_status_html(stats: &DaemonStats, user: Option<&UserRecord>) -> Strin
                 auth_url
             )
         }
+    };
+
+    // Build create VM button (only shown when logged in)
+    let create_vm_button = match user {
+        Some(_) => r#"<button onclick="createVm()" style="padding:8px 16px;background:#28a745;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.9em;">Create VM</button>
+<script>
+async function createVm() {
+    const btn = event.target;
+    btn.disabled = true;
+    btn.textContent = 'Creating...';
+    try {
+        const resp = await fetch('/api/vms', { method: 'POST', credentials: 'include' });
+        if (resp.ok) {
+            location.reload();
+        } else {
+            const err = await resp.text();
+            alert('Failed to create VM: ' + err);
+            btn.disabled = false;
+            btn.textContent = 'Create VM';
+        }
+    } catch (e) {
+        alert('Failed to create VM: ' + e);
+        btn.disabled = false;
+        btn.textContent = 'Create VM';
+    }
+}
+</script>"#.to_string(),
+        None => String::new(),
     };
 
     // Get current commit and releases
@@ -698,8 +731,10 @@ $ git push origin main</pre>
         <span><b>VMs:</b> {} running, {} stopped</span>
     </div>
 
+    {}
+
     <table>
-        <tr><th>Name</th><th>State</th><th>Domain</th><th>Disk</th></tr>
+        <tr><th>Name</th><th>State</th><th>Domain</th><th>Disk</th><th>Actions</th></tr>
         {}
     </table>
 
@@ -714,6 +749,7 @@ $ git push origin main</pre>
         stats.format_uptime(),
         running_count,
         stopped_count,
+        create_vm_button,
         vm_rows
     )
 }
@@ -727,6 +763,213 @@ fn html_escape(s: &str) -> String {
         .replace('\'', "&#x27;")
 }
 
+/// Generate the web console HTML page with xterm.js
+fn generate_web_console_html(vm_name: &str, server_ip: &str) -> String {
+    let ws_host = format!("fcm.{}.sslip.io", server_ip.replace('.', "-"));
+    format!(
+        r##"<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Console: {vm_name}</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{
+            background: #1e1e1e;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }}
+        .header {{
+            background: #2d2d2d;
+            padding: 8px 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #404040;
+        }}
+        .header h1 {{
+            color: #fff;
+            font-size: 14px;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            font-weight: 500;
+        }}
+        .header a {{
+            color: #888;
+            text-decoration: none;
+            font-size: 13px;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }}
+        .header a:hover {{ color: #fff; }}
+        #terminal {{
+            flex: 1;
+            padding: 8px;
+        }}
+        .status {{
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0,0,0,0.8);
+            color: #fff;
+            padding: 20px 40px;
+            border-radius: 8px;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            display: none;
+            z-index: 100;
+        }}
+        .status.show {{ display: block; }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>{vm_name}</h1>
+        <a href="/">← Back to Dashboard</a>
+    </div>
+    <div id="terminal"></div>
+    <div id="status" class="status">Connecting...</div>
+
+    <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.9.0/lib/xterm-addon-web-links.min.js"></script>
+    <script>
+        const vmName = '{vm_name}';
+        const wsHost = '{ws_host}';
+        const statusEl = document.getElementById('status');
+
+        // Initialize terminal
+        const term = new Terminal({{
+            cursorBlink: true,
+            fontSize: 14,
+            fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+            theme: {{
+                background: '#1e1e1e',
+                foreground: '#d4d4d4',
+                cursor: '#d4d4d4',
+                selection: 'rgba(255, 255, 255, 0.3)',
+                black: '#000000',
+                red: '#cd3131',
+                green: '#0dbc79',
+                yellow: '#e5e510',
+                blue: '#2472c8',
+                magenta: '#bc3fbc',
+                cyan: '#11a8cd',
+                white: '#e5e5e5',
+                brightBlack: '#666666',
+                brightRed: '#f14c4c',
+                brightGreen: '#23d18b',
+                brightYellow: '#f5f543',
+                brightBlue: '#3b8eea',
+                brightMagenta: '#d670d6',
+                brightCyan: '#29b8db',
+                brightWhite: '#ffffff'
+            }}
+        }});
+
+        const fitAddon = new FitAddon.FitAddon();
+        const webLinksAddon = new WebLinksAddon.WebLinksAddon();
+        term.loadAddon(fitAddon);
+        term.loadAddon(webLinksAddon);
+        term.open(document.getElementById('terminal'));
+        fitAddon.fit();
+
+        let ws = null;
+        let reconnectAttempts = 0;
+        const maxReconnectAttempts = 5;
+
+        function showStatus(msg) {{
+            statusEl.textContent = msg;
+            statusEl.classList.add('show');
+        }}
+
+        function hideStatus() {{
+            statusEl.classList.remove('show');
+        }}
+
+        function connect() {{
+            showStatus('Connecting...');
+
+            // Build WebSocket URL with session=web for web-based console
+            const cols = term.cols;
+            const rows = term.rows;
+            const wsUrl = `wss://${{wsHost}}/console?vm=${{encodeURIComponent(vmName)}}&cols=${{cols}}&rows=${{rows}}&session=web&env=TERM=xterm-256color`;
+
+            ws = new WebSocket(wsUrl);
+            ws.binaryType = 'arraybuffer';
+
+            ws.onopen = function() {{
+                hideStatus();
+                reconnectAttempts = 0;
+                term.focus();
+            }};
+
+            ws.onmessage = function(event) {{
+                if (event.data instanceof ArrayBuffer) {{
+                    // Binary data - terminal output
+                    const text = new TextDecoder().decode(event.data);
+                    term.write(text);
+                }} else {{
+                    // Text data - control messages (session info, etc.)
+                    try {{
+                        const msg = JSON.parse(event.data);
+                        if (msg.session) {{
+                            console.log('Session:', msg.session);
+                        }}
+                    }} catch (e) {{
+                        // Not JSON, write as text
+                        term.write(event.data);
+                    }}
+                }}
+            }};
+
+            ws.onclose = function(event) {{
+                if (reconnectAttempts < maxReconnectAttempts) {{
+                    reconnectAttempts++;
+                    showStatus(`Disconnected. Reconnecting (${{reconnectAttempts}}/${{maxReconnectAttempts}})...`);
+                    setTimeout(connect, 1000 * reconnectAttempts);
+                }} else {{
+                    showStatus('Connection lost. Refresh to reconnect.');
+                }}
+            }};
+
+            ws.onerror = function(error) {{
+                console.error('WebSocket error:', error);
+            }};
+        }}
+
+        // Send terminal input to WebSocket
+        term.onData(function(data) {{
+            if (ws && ws.readyState === WebSocket.OPEN) {{
+                // Send as binary
+                const encoder = new TextEncoder();
+                ws.send(encoder.encode(data));
+            }}
+        }});
+
+        // Handle terminal resize
+        window.addEventListener('resize', function() {{
+            fitAddon.fit();
+            if (ws && ws.readyState === WebSocket.OPEN) {{
+                const resizeMsg = JSON.stringify({{
+                    type: 'resize',
+                    cols: term.cols,
+                    rows: term.rows
+                }});
+                ws.send(resizeMsg);
+            }}
+        }});
+
+        // Start connection
+        connect();
+    </script>
+</body>
+</html>"##,
+        vm_name = html_escape(vm_name),
+        ws_host = ws_host
+    )
+}
 
 /// Response for VM operations
 #[derive(Debug, Serialize)]
@@ -1385,6 +1628,7 @@ fn handle_terminal_connection(
     stream: TcpStream,
     token: &str,
     _console_fds: &ConsoleFds,
+    sessions: &SessionStore,
 ) {
     // Use RefCell for interior mutability to share with closure
     use std::cell::RefCell;
@@ -1392,10 +1636,11 @@ fn handle_terminal_connection(
     // Variables to store parsed request info from callback
     let parsed_request: RefCell<Option<WsConsoleRequest>> = RefCell::new(None);
     let token_copy = token.to_string();
+    let sessions_clone = Arc::clone(sessions);
 
     // Use accept_hdr to inspect HTTP headers during WebSocket handshake
     let callback = |req: &WsRequest, response: WsResponse| -> Result<WsResponse, WsErrorResponse> {
-        // Extract Authorization header
+        // Extract Authorization header (for CLI clients)
         let auth_header = req.headers()
             .iter()
             .find(|(name, _)| name.as_str().eq_ignore_ascii_case("authorization"))
@@ -1405,6 +1650,31 @@ fn handle_terminal_connection(
             .as_ref()
             .and_then(|h| h.strip_prefix("Bearer "))
             .map(|t| t.trim().to_string());
+
+        // Extract Cookie header (for web clients)
+        let cookie_header = req.headers()
+            .iter()
+            .find(|(name, _)| name.as_str().eq_ignore_ascii_case("cookie"))
+            .map(|(_, value)| value.to_str().unwrap_or_default().to_string());
+
+        // Try to get user from cookie session
+        let cookie_user = cookie_header.as_ref().and_then(|cookies| {
+            // Parse fcm_session cookie
+            for part in cookies.split(';') {
+                let part = part.trim();
+                if let Some(session_id) = part.strip_prefix("fcm_session=") {
+                    // Look up session in the store
+                    if let Ok(store) = sessions_clone.lock() {
+                        if let Some(google_user) = store.get(session_id) {
+                            // Look up UserRecord from database
+                            let db = load_user_db();
+                            return db.users.get(&google_user.id).cloned();
+                        }
+                    }
+                }
+            }
+            None
+        });
 
         // Parse query params from URI
         let uri = req.uri().to_string();
@@ -1433,14 +1703,19 @@ fn handle_terminal_connection(
         // Extract optional session ID for reconnection
         let session = params.get("session").cloned().filter(|s| !s.is_empty());
 
-        // Validate token
-        let request_token = bearer_token.unwrap_or_default();
-        if request_token.is_empty() {
+        // Determine auth token - prefer Bearer token, fall back to cookie auth
+        // For cookie auth, we use a special marker that will be handled later
+        let request_token = if let Some(token) = bearer_token {
+            token
+        } else if let Some(user) = &cookie_user {
+            // Use special format to indicate cookie-based auth: "cookie:{user_id}:{is_admin}"
+            format!("cookie:{}:{}", user.id, user.is_admin)
+        } else {
             return Err(tungstenite::http::Response::builder()
                 .status(401)
-                .body(Some("Missing Authorization header".to_string()))
+                .body(Some("Missing Authorization header or session cookie".to_string()))
                 .unwrap());
-        }
+        };
 
         // Store parsed request for later use
         *parsed_request.borrow_mut() = Some(WsConsoleRequest {
@@ -1485,6 +1760,17 @@ fn handle_terminal_connection(
                 eprintln!("Invalid user token for WebSocket console");
                 return;
             }
+        }
+    } else if request.token.starts_with("cookie:") {
+        // Cookie-based auth: "cookie:{user_id}:{is_admin}"
+        let parts: Vec<&str> = request.token.splitn(3, ':').collect();
+        if parts.len() == 3 {
+            let user_id = parts[1].to_string();
+            let is_admin = parts[2] == "true";
+            AccessLevel::User { id: user_id, is_admin }
+        } else {
+            eprintln!("Invalid cookie auth format for WebSocket console");
+            return;
         }
     } else {
         eprintln!("Invalid token for WebSocket console");
@@ -1837,7 +2123,7 @@ fn send_html_response(stream: &mut TcpStream, status: u16, html: &str, set_cooki
 }
 
 /// Run the status page server (port 7780)
-fn run_status_server(stats: Arc<DaemonStats>, sessions: SessionStore) {
+fn run_status_server(stats: Arc<DaemonStats>, sessions: SessionStore, console_fds: ConsoleFds) {
     let bind_addr = format!("0.0.0.0:{}", STATUS_PAGE_PORT);
     let listener = match TcpListener::bind(&bind_addr) {
         Ok(l) => l,
@@ -1852,6 +2138,7 @@ fn run_status_server(stats: Arc<DaemonStats>, sessions: SessionStore) {
     for mut stream in listener.incoming().flatten() {
         let stats = Arc::clone(&stats);
         let sessions = Arc::clone(&sessions);
+        let console_fds = Arc::clone(&console_fds);
         thread::spawn(move || {
             // Read HTTP request
             let mut buf = [0u8; 4096];
@@ -2128,6 +2415,113 @@ fn run_status_server(stats: Arc<DaemonStats>, sessions: SessionStore) {
                         return;
                     }
                 }
+
+                // Web console page
+                if let Some(vm_name) = path.strip_prefix("/web-console/") {
+                    // Check if user is logged in
+                    if user_record.is_none() {
+                        send_redirect(&mut stream, &base_url, None);
+                        return;
+                    }
+
+                    // Verify VM exists and user has access
+                    let vm_name = vm_name.trim_end_matches('/');
+                    match vm::find_vm(vm_name) {
+                        Ok(config) => {
+                            // Check access
+                            let user = user_record.as_ref().unwrap();
+                            let has_access = user.is_admin || config.owner.as_ref() == Some(&user.id);
+                            if !has_access {
+                                let html = "<html><body><h1>403 Forbidden</h1><p>You don't have access to this VM.</p></body></html>";
+                                send_html_response(&mut stream, 403, html, None);
+                                return;
+                            }
+
+                            if config.state != VmState::Running {
+                                let html = "<html><body><h1>VM Not Running</h1><p>This VM is not running. Start it first to access the console.</p></body></html>";
+                                send_html_response(&mut stream, 503, html, None);
+                                return;
+                            }
+
+                            // Serve web console page
+                            let console_html = generate_web_console_html(vm_name, &stats.server_ip);
+                            send_html_response(&mut stream, 200, &console_html, None);
+                            return;
+                        }
+                        Err(_) => {
+                            let html = "<html><body><h1>404 Not Found</h1><p>VM not found.</p></body></html>";
+                            send_html_response(&mut stream, 404, html, None);
+                            return;
+                        }
+                    }
+                }
+            }
+
+            // Handle POST /api/vms - create VM via web interface
+            if method == "POST" && path == "/api/vms" {
+                // Check if user is logged in
+                if user_record.is_none() {
+                    let response = "HTTP/1.1 401 Unauthorized\r\nContent-Type: text/plain\r\nContent-Length: 12\r\nConnection: close\r\n\r\nUnauthorized";
+                    let _ = stream.write_all(response.as_bytes());
+                    return;
+                }
+
+                let user = user_record.as_ref().unwrap();
+
+                // Create VM with default settings (expose port 3000)
+                match vm::create_vm(None, Some(3000), None, Some(user.id.clone())) {
+                    Ok((config, pty_fd)) => {
+                        // Store PTY FD for console access
+                        {
+                            let mut fds = console_fds.lock().unwrap();
+                            fds.insert(config.id.clone(), pty_fd);
+                        }
+
+                        // Setup git repo for the VM
+                        let domain = caddy::generate_domain(&config.name, &stats.server_ip);
+                        if let Err(e) = crate::git::create_repo(&config.name, &config.ip, &domain) {
+                            eprintln!("Failed to setup git repo for {}: {}", config.name, e);
+                        }
+
+                        // Add to Caddy for SSL
+                        if let Err(e) = caddy::add_site(&domain, &config.ip, 3000) {
+                            eprintln!("Failed to add Caddy site for {}: {}", config.name, e);
+                        }
+
+                        // Update config with expose info
+                        let mut updated_config = config.clone();
+                        updated_config.expose = Some(crate::vm::ExposeConfig {
+                            port: 3000,
+                            domain: domain.clone(),
+                        });
+                        let _ = updated_config.save();
+
+                        // Return success JSON
+                        let json = serde_json::json!({
+                            "id": config.id,
+                            "name": config.name,
+                            "domain": domain,
+                        });
+                        let json_str = serde_json::to_string(&json).unwrap_or_default();
+                        let response = format!(
+                            "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            json_str.len(),
+                            json_str
+                        );
+                        let _ = stream.write_all(response.as_bytes());
+                        return;
+                    }
+                    Err(e) => {
+                        let error_msg = format!("Failed to create VM: {}", e);
+                        let response = format!(
+                            "HTTP/1.1 500 Internal Server Error\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            error_msg.len(),
+                            error_msg
+                        );
+                        let _ = stream.write_all(response.as_bytes());
+                        return;
+                    }
+                }
             }
 
             // Generate and send status page
@@ -2138,7 +2532,7 @@ fn run_status_server(stats: Arc<DaemonStats>, sessions: SessionStore) {
 }
 
 /// Run the terminal server (port 7778)
-fn run_terminal_server(token: String, console_fds: ConsoleFds) {
+fn run_terminal_server(token: String, console_fds: ConsoleFds, sessions: SessionStore) {
     let listener = match TcpListener::bind(TERMINAL_BIND_ADDR) {
         Ok(l) => l,
         Err(e) => {
@@ -2154,10 +2548,11 @@ fn run_terminal_server(token: String, console_fds: ConsoleFds) {
             Ok(stream) => {
                 let token = token.clone();
                 let console_fds = Arc::clone(&console_fds);
+                let sessions = Arc::clone(&sessions);
 
                 // Handle each connection in a new thread
                 thread::spawn(move || {
-                    handle_terminal_connection(stream, &token, &console_fds);
+                    handle_terminal_connection(stream, &token, &console_fds, &sessions);
                 });
             }
             Err(e) => {
@@ -2214,8 +2609,9 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     {
         let stats_clone = Arc::clone(&stats);
         let sessions_clone = Arc::clone(&oauth_sessions);
+        let console_fds_clone = Arc::clone(&console_fds);
         thread::spawn(move || {
-            run_status_server(stats_clone, sessions_clone);
+            run_status_server(stats_clone, sessions_clone, console_fds_clone);
         });
     }
 
@@ -2223,8 +2619,9 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     {
         let terminal_token = token.clone();
         let terminal_console_fds = Arc::clone(&console_fds);
+        let terminal_sessions = Arc::clone(&oauth_sessions);
         thread::spawn(move || {
-            run_terminal_server(terminal_token, terminal_console_fds);
+            run_terminal_server(terminal_token, terminal_console_fds, terminal_sessions);
         });
     }
 
