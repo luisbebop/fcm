@@ -1718,5 +1718,28 @@
 - All 91 tests pass with zero warnings
 - Commit: 59e9271
 
+### Task 98: Add zsh as Default Console Shell
+- Added zsh as the default shell for serial console access
+- Provides better interactive experience than default ash/sh:
+  - Command history
+  - Tab completion
+  - Better prompt customization
+  - Vi/Emacs keybindings
+- rootfs/Dockerfile:
+  - Added zsh package to base image
+- rootfs/init:
+  - Replaced agetty with direct zsh login shell on ttyS0
+  - `setsid sh -c 'exec zsh --login' <>/dev/ttyS0 >&0 2>&1 &`
+  - Simpler than agetty (no getty overhead)
+- src/vm.rs:
+  - Fixed openpty call: changed `std::ptr::null()` to `std::ptr::null_mut()`
+  - Corrects type safety for mutable pointer parameters
+- Rebuilt base-rootfs.img (855MB sparse)
+- Verified zsh works via console:
+  - `echo $0` returns "zsh"
+  - `/bin/zsh` binary present
+- All 91 tests pass with zero clippy warnings
+- Commit: e9ae7a6
+
 ## Next Tasks
-- None currently - serial console implementation complete
+- None currently - zsh console shell implementation complete
