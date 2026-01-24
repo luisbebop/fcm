@@ -1674,5 +1674,30 @@
 - No code changes (Dockerfile/init changes were in Task 94)
 - Task 94's serial console implementation verified working end-to-end
 
+### Task 96: Delete Unused fcm-agent and session Module (PRD Cleanup)
+- Completed PRD cleanup: delete files marked for deletion in console redesign plan
+- Deleted fcm-agent/ directory entirely (~350 lines of code):
+  - fcm-agent/Cargo.toml
+  - fcm-agent/src/main.rs
+  - fcm-agent/target/ (build artifacts)
+- Deleted src/session.rs (~246 lines of code):
+  - SessionManager struct (no longer needed with direct PTY I/O)
+  - SessionInfo struct
+  - SessionError enum
+  - 8 unit tests for session management
+- Updated src/daemon.rs:
+  - Removed `use crate::session::SessionManager;` import
+  - Removed session_manager parameter from handle_stop_vm()
+  - Removed session_manager parameter from handle_destroy_vm()
+  - Removed session_manager parameter from handle_request()
+  - Removed session_manager.remove_vm_sessions() calls
+  - Removed SessionManager::new() in run()
+- Updated src/main.rs:
+  - Removed `mod session;` declaration
+- Total code removed: ~600 lines
+- PTY FD tracking now handled entirely by console_fds in daemon.rs
+- All 91 tests pass with zero clippy warnings
+- Commit: dd466f3
+
 ## Next Tasks
 - None currently - serial console implementation complete
