@@ -212,7 +212,7 @@ struct SessionResponse {
     #[allow(dead_code)]
     vm_id: String,
     #[allow(dead_code)]
-    tmux_session: String,
+    session_name: String,
     #[allow(dead_code)]
     created_at: u64,
     #[allow(dead_code)]

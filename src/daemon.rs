@@ -2,7 +2,7 @@
 
 use crate::caddy;
 use crate::network;
-use crate::session::{attach_to_session, SessionError, SessionInfo, SessionManager};
+use crate::session::{connect_to_agent, send_resize, base64_decode, extract_stdout, make_stdin_message, SessionError, SessionInfo, SessionManager};
 use crate::vm::{self, VmConfig, VmError, VmState, BASE_DIR};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -749,7 +749,7 @@ impl From<&VmConfig> for VmResponse {
 pub struct SessionResponse {
     pub id: String,
     pub vm_id: String,
-    pub tmux_session: String,
+    pub session_name: String,
     pub created_at: u64,
     pub is_default: bool,
 }
@@ -759,7 +759,7 @@ impl From<&SessionInfo> for SessionResponse {
         SessionResponse {
             id: info.id.clone(),
             vm_id: info.vm_id.clone(),
-            tmux_session: info.tmux_session.clone(),
+            session_name: info.session_name.clone(),
             created_at: info.created_at,
             is_default: info.is_default,
         }
@@ -1148,8 +1148,7 @@ fn handle_create_session(
         Err(e) => {
             let status = match &e {
                 SessionError::VmNotAvailable(_) => 503,
-                SessionError::SshError(_) => 502,
-                SessionError::TmuxError(_) => 500,
+                SessionError::ConnectionFailed(_) => 502,
                 _ => 500,
             };
             send_error(request, status, &e.to_string())
@@ -1327,65 +1326,39 @@ fn handle_terminal_connection(
         return;
     }
 
-    // Get or create the session - this ensures session persists across disconnects
-    // If the session doesn't exist in memory or on the VM, it will be auto-created
-    let session = match session_manager.get_or_create_console(&config.id, &config.ip) {
-        Ok(session) => session,
+    // Register session in memory (for tracking)
+    let _ = session_manager.get_or_create_console(&config.id, &config.ip);
+
+    // Connect to fcm-agent on VM
+    let mut agent_stream = match connect_to_agent(&config.ip) {
+        Ok(s) => s,
         Err(e) => {
-            let _ = send_terminal_error(
-                &mut stream,
-                &format!("Failed to get/create session: {}", e),
-            );
+            let _ = send_terminal_error(&mut stream, &format!("Failed to connect to fcm-agent: {}", e));
             return;
         }
     };
 
-    // Spawn SSH process attached to tmux session with correct terminal size
-    let mut child = match attach_to_session(&config.ip, &session.tmux_session, request.cols, request.rows) {
-        Ok(child) => child,
-        Err(e) => {
-            let _ = send_terminal_error(&mut stream, &format!("Failed to attach to session: {}", e));
-            return;
-        }
-    };
+    // Send initial terminal size to agent
+    if let Err(e) = send_resize(&mut agent_stream, request.cols, request.rows) {
+        let _ = send_terminal_error(&mut stream, &format!("Failed to send resize: {}", e));
+        return;
+    }
 
-    // Send success response
+    // Send success response to client
     let response = TerminalConnectResponse {
         success: true,
         error: None,
     };
     if let Err(e) = send_terminal_response(&mut stream, &response) {
         eprintln!("Failed to send success response: {}", e);
-        let _ = child.kill();
         return;
     }
 
     // Clear read timeout for I/O proxying
     let _ = stream.set_read_timeout(None);
 
-    // Get child stdin/stdout
-    let child_stdin = match child.stdin.take() {
-        Some(stdin) => stdin,
-        None => {
-            eprintln!("Failed to get child stdin");
-            let _ = child.kill();
-            return;
-        }
-    };
-    let child_stdout = match child.stdout.take() {
-        Some(stdout) => stdout,
-        None => {
-            eprintln!("Failed to get child stdout");
-            let _ = child.kill();
-            return;
-        }
-    };
-
-    // Proxy I/O between client and SSH process
-    proxy_terminal_io(stream, child_stdin, child_stdout);
-
-    // Wait for child to exit
-    let _ = child.wait();
+    // Proxy JSON-framed messages between client and fcm-agent
+    proxy_agent_io(stream, agent_stream);
 }
 
 /// Send an error response to the terminal client
@@ -1405,48 +1378,70 @@ fn send_terminal_response(stream: &mut TcpStream, response: &TerminalConnectResp
     stream.flush()
 }
 
-/// Proxy I/O between TCP stream and child process stdin/stdout
-fn proxy_terminal_io(
-    stream: TcpStream,
-    mut child_stdin: std::process::ChildStdin,
-    mut child_stdout: std::process::ChildStdout,
-) {
-    // Clone stream for reader thread
-    let mut read_stream = match stream.try_clone() {
+/// Proxy I/O between client TCP stream and fcm-agent
+///
+/// Protocol:
+/// - Client sends raw bytes, we convert to JSON: {"stdin":"base64data"}
+/// - Agent sends JSON: {"stdout":"base64data"}, we decode and send raw bytes to client
+/// - Agent sends {"exit":N} when shell exits (shell respawns automatically)
+fn proxy_agent_io(client_stream: TcpStream, agent_stream: TcpStream) {
+    // Clone streams for threads
+    let client_read = match client_stream.try_clone() {
         Ok(s) => s,
         Err(_) => return,
     };
-    let mut write_stream = stream;
+    let mut client_write = client_stream;
 
-    // Spawn thread to read from child stdout and write to client
-    let stdout_handle = thread::spawn(move || {
-        let mut buf = [0u8; 4096];
+    let agent_read = match agent_stream.try_clone() {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let mut agent_write = agent_stream;
+
+    // Thread to read from fcm-agent and write to client
+    // Agent sends JSON messages, we decode and send raw bytes
+    let agent_reader_handle = thread::spawn(move || {
+        let mut reader = BufReader::new(agent_read);
+        let mut line = String::new();
+
         loop {
-            match child_stdout.read(&mut buf) {
+            line.clear();
+            match reader.read_line(&mut line) {
                 Ok(0) => break, // EOF
-                Ok(n) => {
-                    if write_stream.write_all(&buf[..n]).is_err() {
-                        break;
+                Ok(_) => {
+                    let trimmed = line.trim();
+                    if let Some(encoded) = extract_stdout(trimmed) {
+                        // Decode base64 and write raw bytes to client
+                        let decoded = base64_decode(&encoded);
+                        if client_write.write_all(&decoded).is_err() {
+                            break;
+                        }
+                        if client_write.flush().is_err() {
+                            break;
+                        }
                     }
-                    if write_stream.flush().is_err() {
-                        break;
-                    }
+                    // Ignore {"exit":N} - shell respawns automatically
                 }
                 Err(_) => break,
             }
         }
     });
 
-    // Main thread reads from client and writes to child stdin
+    // Main thread reads from client and writes to fcm-agent
+    // Client sends raw bytes, we encode to JSON
     let mut buf = [0u8; 4096];
+    let mut client_read_stream = client_read;
+
     loop {
-        match read_stream.read(&mut buf) {
+        match client_read_stream.read(&mut buf) {
             Ok(0) => break, // EOF
             Ok(n) => {
-                if child_stdin.write_all(&buf[..n]).is_err() {
+                // Encode as JSON stdin message
+                let msg = make_stdin_message(&buf[..n]);
+                if agent_write.write_all(msg.as_bytes()).is_err() {
                     break;
                 }
-                if child_stdin.flush().is_err() {
+                if agent_write.flush().is_err() {
                     break;
                 }
             }
@@ -1454,11 +1449,8 @@ fn proxy_terminal_io(
         }
     }
 
-    // Close stdin to signal EOF to child
-    drop(child_stdin);
-
-    // Wait for stdout thread to finish
-    let _ = stdout_handle.join();
+    // Wait for agent reader thread to finish
+    let _ = agent_reader_handle.join();
 }
 
 /// Parse HTTP request and extract method, path, headers
@@ -1904,14 +1896,14 @@ mod tests {
         let info = SessionInfo {
             id: "abc123".to_string(),
             vm_id: "vm456".to_string(),
-            tmux_session: "fcm-abc123".to_string(),
+            session_name: "console-vm456".to_string(),
             created_at: 1700000000,
             is_default: true,
         };
         let response = SessionResponse::from(&info);
         assert_eq!(response.id, "abc123");
         assert_eq!(response.vm_id, "vm456");
-        assert_eq!(response.tmux_session, "fcm-abc123");
+        assert_eq!(response.session_name, "console-vm456");
         assert_eq!(response.created_at, 1700000000);
         assert!(response.is_default);
     }

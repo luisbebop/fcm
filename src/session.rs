@@ -1,15 +1,18 @@
 // Session management module for persistent console sessions
 //
-// Manages tmux sessions on VMs via SSH. The daemon tracks active sessions
-// and can create/list/kill sessions on demand.
+// Connects to fcm-agent on VMs via TCP for PTY management.
+// The fcm-agent handles PTY spawning, I/O, and shell respawning directly.
 
-use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
-use std::process::{Child, Command, Stdio};
+use std::io::{self, BufRead, BufReader, Write};
+use std::net::TcpStream;
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+/// Port that fcm-agent listens on inside VMs
+pub const AGENT_PORT: u16 = 7779;
 
 /// Session error types
 #[derive(Debug)]
@@ -20,11 +23,8 @@ pub enum SessionError {
     /// VM not found or not running
     #[allow(dead_code)] // Matched in daemon.rs but not constructed yet
     VmNotAvailable(String),
-    /// SSH connection failed
-    #[allow(dead_code)] // Matched in daemon.rs but not constructed yet
-    SshError(String),
-    /// Tmux command failed
-    TmuxError(String),
+    /// Connection to fcm-agent failed
+    ConnectionFailed(String),
     /// IO error
     Io(std::io::Error),
 }
@@ -34,8 +34,7 @@ impl fmt::Display for SessionError {
         match self {
             SessionError::NotFound(id) => write!(f, "Session '{}' not found", id),
             SessionError::VmNotAvailable(vm) => write!(f, "VM '{}' not available", vm),
-            SessionError::SshError(msg) => write!(f, "SSH error: {}", msg),
-            SessionError::TmuxError(msg) => write!(f, "Tmux error: {}", msg),
+            SessionError::ConnectionFailed(msg) => write!(f, "Connection to fcm-agent failed: {}", msg),
             SessionError::Io(e) => write!(f, "IO error: {}", e),
         }
     }
@@ -52,12 +51,12 @@ impl From<std::io::Error> for SessionError {
 /// Information about an active session
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionInfo {
-    /// Unique session ID
+    /// Unique session ID (same as VM ID)
     pub id: String,
     /// VM ID this session belongs to
     pub vm_id: String,
-    /// Tmux session name (same as id)
-    pub tmux_session: String,
+    /// Session name for display
+    pub session_name: String,
     /// Creation timestamp (unix epoch seconds)
     pub created_at: u64,
     /// Whether this is the default session for the VM
@@ -69,21 +68,6 @@ pub fn vm_session_name(vm_id: &str) -> String {
     format!("console-{}", vm_id)
 }
 
-/// Generate a random 6-character session ID
-fn generate_session_id() -> String {
-    let mut rng = rand::thread_rng();
-    (0..6)
-        .map(|_| {
-            let idx = rng.gen_range(0..36);
-            if idx < 10 {
-                (b'0' + idx) as char
-            } else {
-                (b'a' + idx - 10) as char
-            }
-        })
-        .collect()
-}
-
 /// Get current timestamp in seconds since epoch
 fn current_timestamp() -> u64 {
     SystemTime::now()
@@ -92,10 +76,10 @@ fn current_timestamp() -> u64 {
         .unwrap_or(0)
 }
 
-/// Session manager tracks all active sessions across VMs
+/// Session manager tracks active console sessions
 #[derive(Clone)]
 pub struct SessionManager {
-    /// Map of session_id -> SessionInfo
+    /// Map of vm_id -> SessionInfo
     sessions: Arc<Mutex<HashMap<String, SessionInfo>>>,
 }
 
@@ -107,32 +91,17 @@ impl SessionManager {
         }
     }
 
-    /// Get or create the console session for a VM
+    /// Get or create session info for a VM
     ///
-    /// Each VM has exactly one console session. This method:
-    /// 1. Checks if tmux session exists on VM
-    /// 2. Creates new tmux session if needed (e.g., user typed 'exit')
-    /// 3. Returns session info (cached or newly created)
-    ///
-    /// This ensures the session persists across client disconnects,
-    /// and automatically recreates the session if the user exited the shell.
+    /// This registers the session in memory for tracking.
+    /// The actual connection is made separately via connect_to_agent().
     pub fn get_or_create_console(
         &self,
         vm_id: &str,
-        vm_ip: &str,
+        _vm_ip: &str,
     ) -> Result<SessionInfo, SessionError> {
-        let tmux_session = vm_session_name(vm_id);
-        let session_id = vm_id.to_string(); // Use VM ID as session ID for simplicity
-
-        // Always check if tmux session exists on the VM
-        // (it may have been destroyed if user typed 'exit')
-        let active_sessions = list_tmux_sessions(vm_ip).unwrap_or_default();
-        let session_exists = active_sessions.contains(&tmux_session);
-
-        if !session_exists {
-            // Create tmux session on VM via SSH
-            create_tmux_session(vm_ip, &tmux_session)?;
-        }
+        let session_name = vm_session_name(vm_id);
+        let session_id = vm_id.to_string();
 
         // Check if we already have this session in memory
         {
@@ -142,11 +111,11 @@ impl SessionManager {
             }
         }
 
-        // Register session in memory
+        // Register new session
         let session = SessionInfo {
             id: session_id.clone(),
             vm_id: vm_id.to_string(),
-            tmux_session,
+            session_name,
             created_at: current_timestamp(),
             is_default: true,
         };
@@ -156,43 +125,17 @@ impl SessionManager {
         Ok(session)
     }
 
-    /// Create a new session on a VM (legacy - use get_or_create_console instead)
-    ///
-    /// If is_default is true, creates or returns the default session.
-    /// Otherwise creates a new named session.
+    /// Create a new session on a VM (legacy API - redirects to get_or_create_console)
     pub fn create_session(
         &self,
         vm_id: &str,
         vm_ip: &str,
-        is_default: bool,
+        _is_default: bool,
     ) -> Result<SessionInfo, SessionError> {
-        // For default sessions, use the new unified approach
-        if is_default {
-            return self.get_or_create_console(vm_id, vm_ip);
-        }
-
-        let mut sessions = self.sessions.lock().unwrap();
-
-        // Generate new session ID
-        let session_id = generate_session_id();
-        let tmux_session = format!("fcm-{}", session_id);
-
-        // Create tmux session on VM via SSH
-        create_tmux_session(vm_ip, &tmux_session)?;
-
-        let session = SessionInfo {
-            id: session_id.clone(),
-            vm_id: vm_id.to_string(),
-            tmux_session,
-            created_at: current_timestamp(),
-            is_default,
-        };
-
-        sessions.insert(session_id, session.clone());
-        Ok(session)
+        self.get_or_create_console(vm_id, vm_ip)
     }
 
-    /// Get a session by ID (kept for potential future use)
+    /// Get a session by ID
     #[allow(dead_code)]
     pub fn get_session(&self, session_id: &str) -> Option<SessionInfo> {
         let sessions = self.sessions.lock().unwrap();
@@ -212,140 +155,190 @@ impl Default for SessionManager {
     }
 }
 
-/// Create a tmux session on a VM via SSH with clean configuration
-fn create_tmux_session(vm_ip: &str, session_name: &str) -> Result<(), SessionError> {
-    // Create session first
-    let output = Command::new("sshpass")
-        .args([
-            "-p", "root",
-            "ssh",
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
-            "-o", "ConnectTimeout=5",
-            &format!("root@{}", vm_ip),
-            "tmux", "new-session", "-d", "-s", session_name,
-        ])
-        .output()?;
+/// Connect to fcm-agent on a VM
+///
+/// Returns a TCP stream for bidirectional communication.
+/// The caller is responsible for the JSON-framed protocol:
+/// - Send: {"stdin":"base64data"} or {"resize":{"cols":N,"rows":N}}
+/// - Recv: {"stdout":"base64data"} or {"exit":N}
+pub fn connect_to_agent(vm_ip: &str) -> Result<TcpStream, SessionError> {
+    let addr = format!("{}:{}", vm_ip, AGENT_PORT);
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        // Ignore "duplicate session" error - session already exists
-        if !stderr.contains("duplicate session") {
-            return Err(SessionError::TmuxError(stderr.to_string()));
-        }
-    }
+    let stream = TcpStream::connect_timeout(
+        &addr.parse().map_err(|e| SessionError::ConnectionFailed(format!("Invalid address: {}", e)))?,
+        Duration::from_secs(5),
+    ).map_err(|e| SessionError::ConnectionFailed(format!("Cannot connect to {}: {}", addr, e)))?;
 
-    // Configure session for clean UX:
-    // - status off: no status bar at bottom
-    // - destroy-unattached off: keep session when client disconnects
-    // - mouse on: enable mouse scroll and selection
-    let options = [
-        ("status", "off"),
-        ("destroy-unattached", "off"),
-        ("mouse", "on"),
-    ];
+    // Set TCP_NODELAY for low latency
+    stream.set_nodelay(true).ok();
 
-    for (option, value) in options {
-        let _ = Command::new("sshpass")
-            .args([
-                "-p", "root",
-                "ssh",
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "UserKnownHostsFile=/dev/null",
-                "-o", "ConnectTimeout=5",
-                &format!("root@{}", vm_ip),
-                "tmux", "set-option", "-t", session_name, option, value,
-            ])
-            .output();
-    }
-
-    Ok(())
+    Ok(stream)
 }
 
-/// List tmux sessions on a VM via SSH
-fn list_tmux_sessions(vm_ip: &str) -> Result<Vec<String>, SessionError> {
-    let output = Command::new("sshpass")
-        .args([
-            "-p", "root",
-            "ssh",
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
-            "-o", "ConnectTimeout=5",
-            &format!("root@{}", vm_ip),
-            "tmux", "list-sessions", "-F", "#{session_name}",
-        ])
-        .output()?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        // "no server running" means no sessions, not an error
-        if stderr.contains("no server running") || stderr.contains("no sessions") {
-            return Ok(Vec::new());
-        }
-        return Err(SessionError::TmuxError(stderr.to_string()));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    Ok(stdout.lines().map(|s| s.to_string()).collect())
+/// Send initial resize message to fcm-agent
+pub fn send_resize(stream: &mut TcpStream, cols: u16, rows: u16) -> io::Result<()> {
+    let msg = format!("{{\"resize\":{{\"cols\":{},\"rows\":{}}}}}\n", cols, rows);
+    stream.write_all(msg.as_bytes())?;
+    stream.flush()
 }
 
-/// Spawn an SSH process that attaches to a tmux session
-/// Returns the child process for I/O proxying
-pub fn attach_to_session(vm_ip: &str, session_name: &str, cols: u16, rows: u16) -> Result<Child, SessionError> {
-    // First resize the tmux window to match client terminal size
-    let _ = Command::new("sshpass")
-        .args([
-            "-p", "root",
-            "ssh",
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
-            "-o", "ConnectTimeout=5",
-            &format!("root@{}", vm_ip),
-            "tmux", "resize-window", "-t", session_name, "-x", &cols.to_string(), "-y", &rows.to_string(),
-        ])
-        .output();
+/// Base64 encode data for JSON protocol
+pub fn base64_encode(data: &[u8]) -> String {
+    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut result = String::new();
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0] as usize;
+        let b1 = chunk.get(1).copied().unwrap_or(0) as usize;
+        let b2 = chunk.get(2).copied().unwrap_or(0) as usize;
+        result.push(CHARS[b0 >> 2] as char);
+        result.push(CHARS[((b0 & 0x03) << 4) | (b1 >> 4)] as char);
+        if chunk.len() > 1 {
+            result.push(CHARS[((b1 & 0x0f) << 2) | (b2 >> 6)] as char);
+        } else {
+            result.push('=');
+        }
+        if chunk.len() > 2 {
+            result.push(CHARS[b2 & 0x3f] as char);
+        } else {
+            result.push('=');
+        }
+    }
+    result
+}
 
-    // Now attach to the session
-    let child = Command::new("sshpass")
-        .args([
-            "-p", "root",
-            "ssh",
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
-            "-o", "ConnectTimeout=5",
-            "-t", "-t", // Force PTY allocation
-            &format!("root@{}", vm_ip),
-            "tmux", "attach-session", "-t", session_name,
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
+/// Base64 decode data from JSON protocol
+pub fn base64_decode(s: &str) -> Vec<u8> {
+    fn char_to_val(c: char) -> u8 {
+        match c {
+            'A'..='Z' => c as u8 - b'A',
+            'a'..='z' => c as u8 - b'a' + 26,
+            '0'..='9' => c as u8 - b'0' + 52,
+            '+' => 62,
+            '/' => 63,
+            _ => 0,
+        }
+    }
+    let chars: Vec<char> = s.chars().filter(|c| *c != '=').collect();
+    let mut result = Vec::new();
+    for chunk in chars.chunks(4) {
+        if chunk.len() >= 2 {
+            let b0 = char_to_val(chunk[0]);
+            let b1 = char_to_val(chunk[1]);
+            result.push((b0 << 2) | (b1 >> 4));
+        }
+        if chunk.len() >= 3 {
+            let b1 = char_to_val(chunk[1]);
+            let b2 = char_to_val(chunk[2]);
+            result.push((b1 << 4) | (b2 >> 2));
+        }
+        if chunk.len() >= 4 {
+            let b2 = char_to_val(chunk[2]);
+            let b3 = char_to_val(chunk[3]);
+            result.push((b2 << 6) | b3);
+        }
+    }
+    result
+}
 
-    Ok(child)
+/// Extract "stdout" value from JSON message
+pub fn extract_stdout(json: &str) -> Option<String> {
+    extract_json_string(json, "stdout")
+}
+
+/// Extract "stdin" value from JSON message
+#[allow(dead_code)] // Used in tests
+pub fn extract_stdin(json: &str) -> Option<String> {
+    extract_json_string(json, "stdin")
+}
+
+/// Extract "exit" code from JSON message
+#[allow(dead_code)] // Used in tests and for future client-side use
+pub fn extract_exit_code(json: &str) -> Option<i32> {
+    if !json.contains("\"exit\"") {
+        return None;
+    }
+    extract_json_number(json, "exit").map(|n| n as i32)
+}
+
+/// Extract string value from JSON
+fn extract_json_string(json: &str, key: &str) -> Option<String> {
+    let pattern = format!("\"{}\":\"", key);
+    if let Some(start) = json.find(&pattern) {
+        let value_start = start + pattern.len();
+        if let Some(end) = json[value_start..].find('"') {
+            return Some(json[value_start..value_start + end].to_string());
+        }
+    }
+    None
+}
+
+/// Extract number value from JSON
+#[allow(dead_code)] // Used by extract_exit_code
+fn extract_json_number(json: &str, key: &str) -> Option<u32> {
+    let pattern = format!("\"{}\":", key);
+    if let Some(start) = json.find(&pattern) {
+        let value_start = start + pattern.len();
+        let rest = &json[value_start..];
+        let mut num_str = String::new();
+        for c in rest.chars() {
+            if c.is_ascii_digit() {
+                num_str.push(c);
+            } else if !num_str.is_empty() {
+                break;
+            }
+        }
+        return num_str.parse().ok();
+    }
+    None
+}
+
+/// Create stdin message for fcm-agent
+pub fn make_stdin_message(data: &[u8]) -> String {
+    format!("{{\"stdin\":\"{}\"}}\n", base64_encode(data))
+}
+
+/// Create resize message for fcm-agent
+#[allow(dead_code)] // Used in tests and for future client-side use
+pub fn make_resize_message(cols: u16, rows: u16) -> String {
+    format!("{{\"resize\":{{\"cols\":{},\"rows\":{}}}}}\n", cols, rows)
+}
+
+/// Agent connection wrapper for easier I/O
+#[allow(dead_code)] // Convenience wrapper for future use
+pub struct AgentConnection {
+    pub stream: TcpStream,
+    pub reader: BufReader<TcpStream>,
+}
+
+#[allow(dead_code)] // Convenience wrapper for future use
+impl AgentConnection {
+    /// Create new connection to fcm-agent
+    pub fn connect(vm_ip: &str) -> Result<Self, SessionError> {
+        let stream = connect_to_agent(vm_ip)?;
+        let reader = BufReader::new(stream.try_clone()?);
+        Ok(Self { stream, reader })
+    }
+
+    /// Send resize to set initial terminal size
+    pub fn resize(&mut self, cols: u16, rows: u16) -> io::Result<()> {
+        send_resize(&mut self.stream, cols, rows)
+    }
+
+    /// Send stdin data to agent
+    pub fn send_stdin(&mut self, data: &[u8]) -> io::Result<()> {
+        self.stream.write_all(make_stdin_message(data).as_bytes())?;
+        self.stream.flush()
+    }
+
+    /// Read a line from agent (JSON message)
+    pub fn read_line(&mut self, buf: &mut String) -> io::Result<usize> {
+        self.reader.read_line(buf)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_generate_session_id_length() {
-        let id = generate_session_id();
-        assert_eq!(id.len(), 6);
-    }
-
-    #[test]
-    fn test_generate_session_id_alphanumeric() {
-        let id = generate_session_id();
-        assert!(id.chars().all(|c| c.is_ascii_alphanumeric()));
-    }
-
-    #[test]
-    fn test_generate_session_id_lowercase() {
-        let id = generate_session_id();
-        assert!(id.chars().all(|c| c.is_ascii_digit() || c.is_ascii_lowercase()));
-    }
 
     #[test]
     fn test_current_timestamp() {
@@ -366,14 +359,14 @@ mod tests {
         let session = SessionInfo {
             id: "abc123".to_string(),
             vm_id: "vm001".to_string(),
-            tmux_session: "fcm-abc123".to_string(),
+            session_name: "console-vm001".to_string(),
             created_at: 1700000000,
             is_default: true,
         };
         let json = serde_json::to_string(&session).unwrap();
         assert!(json.contains("abc123"));
         assert!(json.contains("vm001"));
-        assert!(json.contains("fcm-abc123"));
+        assert!(json.contains("console-vm001"));
     }
 
     #[test]
@@ -381,14 +374,14 @@ mod tests {
         let json = r#"{
             "id": "xyz789",
             "vm_id": "vm002",
-            "tmux_session": "fcm-xyz789",
+            "session_name": "console-vm002",
             "created_at": 1700000000,
             "is_default": false
         }"#;
         let session: SessionInfo = serde_json::from_str(json).unwrap();
         assert_eq!(session.id, "xyz789");
         assert_eq!(session.vm_id, "vm002");
-        assert_eq!(session.tmux_session, "fcm-xyz789");
+        assert_eq!(session.session_name, "console-vm002");
         assert!(!session.is_default);
     }
 
@@ -396,8 +389,7 @@ mod tests {
     fn test_session_error_display() {
         assert!(SessionError::NotFound("abc".to_string()).to_string().contains("abc"));
         assert!(SessionError::VmNotAvailable("vm1".to_string()).to_string().contains("vm1"));
-        assert!(SessionError::SshError("timeout".to_string()).to_string().contains("timeout"));
-        assert!(SessionError::TmuxError("failed".to_string()).to_string().contains("failed"));
+        assert!(SessionError::ConnectionFailed("timeout".to_string()).to_string().contains("timeout"));
     }
 
     #[test]
@@ -424,7 +416,7 @@ mod tests {
                 SessionInfo {
                     id: "test1".to_string(),
                     vm_id: "vm1".to_string(),
-                    tmux_session: "fcm-test1".to_string(),
+                    session_name: "console-vm1".to_string(),
                     created_at: current_timestamp(),
                     is_default: false,
                 },
@@ -434,7 +426,7 @@ mod tests {
                 SessionInfo {
                     id: "test2".to_string(),
                     vm_id: "vm2".to_string(),
-                    tmux_session: "fcm-test2".to_string(),
+                    session_name: "console-vm2".to_string(),
                     created_at: current_timestamp(),
                     is_default: false,
                 },
@@ -447,5 +439,66 @@ mod tests {
         // Check that vm1 sessions are gone but vm2 sessions remain
         assert!(manager.get_session("test1").is_none());
         assert!(manager.get_session("test2").is_some());
+    }
+
+    #[test]
+    fn test_base64_encode() {
+        assert_eq!(base64_encode(b"Hello"), "SGVsbG8=");
+        assert_eq!(base64_encode(b""), "");
+        assert_eq!(base64_encode(b"a"), "YQ==");
+        assert_eq!(base64_encode(b"ab"), "YWI=");
+        assert_eq!(base64_encode(b"abc"), "YWJj");
+    }
+
+    #[test]
+    fn test_base64_decode() {
+        assert_eq!(base64_decode("SGVsbG8="), b"Hello");
+        assert_eq!(base64_decode(""), b"");
+        assert_eq!(base64_decode("YQ=="), b"a");
+        assert_eq!(base64_decode("YWI="), b"ab");
+        assert_eq!(base64_decode("YWJj"), b"abc");
+    }
+
+    #[test]
+    fn test_base64_roundtrip() {
+        let data = b"Hello, World! \x00\x01\x02\xff";
+        assert_eq!(base64_decode(&base64_encode(data)), data);
+    }
+
+    #[test]
+    fn test_extract_stdout() {
+        assert_eq!(extract_stdout(r#"{"stdout":"SGVsbG8="}"#), Some("SGVsbG8=".to_string()));
+        assert_eq!(extract_stdout(r#"{"exit":0}"#), None);
+    }
+
+    #[test]
+    fn test_extract_stdin() {
+        assert_eq!(extract_stdin(r#"{"stdin":"SGVsbG8="}"#), Some("SGVsbG8=".to_string()));
+        assert_eq!(extract_stdin(r#"{"exit":0}"#), None);
+    }
+
+    #[test]
+    fn test_extract_exit_code() {
+        assert_eq!(extract_exit_code(r#"{"exit":0}"#), Some(0));
+        assert_eq!(extract_exit_code(r#"{"exit":127}"#), Some(127));
+        assert_eq!(extract_exit_code(r#"{"stdout":"data"}"#), None);
+    }
+
+    #[test]
+    fn test_make_stdin_message() {
+        let msg = make_stdin_message(b"ls\n");
+        assert!(msg.contains("stdin"));
+        assert!(msg.ends_with('\n'));
+    }
+
+    #[test]
+    fn test_make_resize_message() {
+        let msg = make_resize_message(120, 40);
+        assert_eq!(msg, "{\"resize\":{\"cols\":120,\"rows\":40}}\n");
+    }
+
+    #[test]
+    fn test_agent_port() {
+        assert_eq!(AGENT_PORT, 7779);
     }
 }
