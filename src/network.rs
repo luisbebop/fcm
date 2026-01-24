@@ -16,6 +16,13 @@ const IP_RANGE_START: u8 = 50;
 /// Last IP in the allocation range
 const IP_RANGE_END: u8 = 254;
 
+// Compile-time validation of IP range constants
+const _: () = {
+    assert!(IP_RANGE_START < IP_RANGE_END);
+    assert!(IP_RANGE_START >= 50);
+    assert!(IP_RANGE_END <= 254);
+};
+
 /// Result type for network operations
 pub type Result<T> = std::result::Result<T, NetworkError>;
 
@@ -290,11 +297,4 @@ mod tests {
         assert!(err.to_string().contains("test error"));
     }
 
-    #[test]
-    fn test_ip_range_valid() {
-        // Verify range constants are valid
-        assert!(IP_RANGE_START < IP_RANGE_END);
-        assert!(IP_RANGE_START >= 50);
-        assert!(IP_RANGE_END <= 254);
-    }
 }
