@@ -1824,15 +1824,14 @@
 - **Client-side Terminfo Helper (console.rs):**
   - Added upload_terminfo(vm, term) function
   - Searches standard terminfo paths (/usr/share/terminfo, /lib/terminfo)
-  - Uploads local terminfo to VM before console connect
-  - Enabled via FCM_UPLOAD_TERMINFO=1 environment variable
+  - Uploads local terminfo to VM on every console connect
   - Best-effort: failure doesn't prevent console connection
 - Testing verified:
   - File upload to /tmp/test-upload.txt works
   - Terminfo upload to /usr/share/terminfo/x/xterm-256color works
   - Invalid paths (e.g., /etc/passwd) are rejected with 403
 - All 101 tests pass with zero clippy warnings
-- Commit: 4e3247d
+- Commits: 4e3247d, 1dc7fae (always upload terminfo)
 
 ## Next Tasks
 - None currently - OSC title prefix and terminfo upload complete
