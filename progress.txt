@@ -1857,5 +1857,27 @@
 - All 101 tests pass with zero clippy warnings
 - Commit: 5cdd2a3
 
+### Task 103: Simplify Console to SSH-based Architecture
+- Major rewrite to fix console input freezing issue
+- Root cause: Complex PTY storage approach with mutex deadlocks
+- **Server changes (daemon.rs):**
+  - Replaced PTY master FD storage/retrieval with SSH-based approach
+  - When WebSocket connects, spawn: `sshpass -p root ssh -tt root@VM_IP`
+  - Pipe WebSocket directly to SSH stdin/stdout via channels
+  - SSH handles PTY allocation on VM side (-tt flag)
+  - Removed unused functions: set_pty_window_size, parse_resize_message, proxy_websocket_pty
+- **Client changes (console.rs):**
+  - Replaced mutex-based read/write with channel-based architecture
+  - Main thread: reads stdin via poll(), sends to WS thread via channel
+  - WS thread: owns WebSocket, handles both send/receive
+  - Stdout thread: receives from channel, writes to terminal
+  - Key fix: Set 50ms read timeout on TLS stream to prevent ws.read() blocking forever
+- **New script (scripts/restart-daemon.sh):**
+  - Compiles daemon and macOS binaries (arm64 + x64) using cargo-zigbuild
+  - Installs binaries to /usr/local/bin and /var/lib/firecracker/releases
+  - Clears logs and restarts daemon
+  - Shows download instructions for macOS clients
+- Commit: 4052044
+
 ## Next Tasks
 - None currently - all PRD features complete
