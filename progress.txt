@@ -2036,3 +2036,9 @@
 - Added once_cell dependency (Cargo.toml)
 - All 98 tests pass with zero clippy warnings
 - Commit: 8e1391d
+
+### Task 113b: Auto-cleanup Dead Sessions
+- Sessions are now automatically removed when SSH exits
+- Reader thread removes session from CONSOLE_SESSIONS when it detects EOF
+- No more stale sessions in `fcm console --ls` after user types `exit`
+- Commit: 13c9050
