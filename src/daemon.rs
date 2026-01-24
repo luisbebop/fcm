@@ -1806,23 +1806,28 @@ fn handle_terminal_connection(
     }
 
     // Get or create session
-    let (session_id, input_tx, output_subscribers, output_buffer, is_reconnect) = if let Some(sid) = request.session {
-        // Reconnect to existing session
+    // First, check if we can reconnect to an existing session
+    let existing_session = if let Some(ref sid) = request.session {
         let sessions = CONSOLE_SESSIONS.lock().unwrap();
-        if let Some(session) = sessions.get(&sid) {
+        if let Some(session) = sessions.get(sid) {
             if session.vm_id != config.id {
                 eprintln!("Session {} belongs to different VM", sid);
                 return;
             }
             eprintln!("Reconnecting to session {} for VM {}", sid, request.vm);
-            (sid.clone(), session.input_tx.clone(), Arc::clone(&session.output_subscribers), Arc::clone(&session.output_buffer), true)
+            Some((sid.clone(), session.input_tx.clone(), Arc::clone(&session.output_subscribers), Arc::clone(&session.output_buffer)))
         } else {
-            eprintln!("Session {} not found", sid);
-            return;
+            None // Session ID provided but doesn't exist - will create new
         }
     } else {
-        // Create new session
-        let session_id = generate_console_session_id();
+        None // No session ID provided - will create new
+    };
+
+    let (session_id, input_tx, output_subscribers, output_buffer, is_reconnect) = if let Some((sid, tx, subs, buf)) = existing_session {
+        (sid, tx, subs, buf, true)
+    } else {
+        // Create new session - use provided ID or generate one
+        let session_id = request.session.clone().unwrap_or_else(generate_console_session_id);
         eprintln!("Creating new session {} for VM {} at {}", session_id, request.vm, vm_ip);
 
         // Build environment variables for SSH
