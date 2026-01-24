@@ -5,6 +5,9 @@ set -e
 
 cd /home/ubuntu/fcm
 
+# Ensure cargo is in PATH (for zigbuild)
+export PATH="/home/ubuntu/.cargo/bin:$PATH"
+
 echo "==> Stopping daemon..."
 sudo pkill -f 'fcm daemon' 2>/dev/null || true
 sleep 1
