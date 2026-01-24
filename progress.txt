@@ -1895,5 +1895,19 @@
 - All 99 tests pass with zero clippy warnings
 - Commit: 7175cbe
 
+### Task 105: Clean Up Leftover fcm-agent Traces
+- Searched codebase for remnants from previous console implementations
+- Console went through 3-4 iterations: SSH+tmux → fcm-agent → PTY storage → SSH-based
+- Found and removed leftover artifacts:
+  - `.gitignore`: Removed `/fcm-agent/target` line (directory deleted in Task 96)
+  - `rootfs/fcm-agent`: Deleted 451KB binary (leftover from fcm-agent approach)
+- Verified clean:
+  - Dockerfile and init script already clean (no fcm-agent references)
+  - No session.rs file (deleted in Task 96)
+  - No base64 encoding code (removed with fcm-agent protocol)
+  - No tmux/agent-related code in src/
+- All 99 tests pass with zero clippy warnings
+- Commit: 83aaaab
+
 ## Next Tasks
 - None currently - all PRD features complete
