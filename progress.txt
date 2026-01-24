@@ -1568,5 +1568,30 @@
 - All 108 tests pass with zero warnings
 - Commit: faed99d
 
+### Task 91: Fix localhost Resolution for Claude Code OAuth
+- Claude Code OAuth failed with "Failed to start server. Is port 0 in use?"
+- Root cause: /etc/hosts file was missing, so `localhost` hostname didn't resolve
+- Claude Code binds to `localhost` (hostname) not `127.0.0.1` (IP)
+- rootfs/init:
+  - Added `ip link set lo up` to bring up loopback interface
+  - Added /etc/hosts with localhost entries:
+    - 127.0.0.1   localhost localhost.localdomain
+    - ::1         localhost localhost.localdomain
+- Rebuilt base-rootfs.img with the fix
+- Tested: localhost now resolves and pings correctly in VM
+- All 108 tests pass with zero warnings
+- Commit: 4b2d83e
+
+### Task 92: Fix Console Reconnect Cursor Position for TUI Apps
+- Problem: After reconnecting to console, cursor position was wrong in Claude Code
+- Root cause: Was sending newline on reconnect, which doesn't trigger TUI redraw
+- Fix: Send Ctrl+L (0x0C, form feed) instead of newline on reconnect
+- Ctrl+L is the standard "refresh screen" command for terminal apps
+- TUI applications like Claude Code respond to Ctrl+L by redrawing the entire screen
+- Updated fcm-agent/src/main.rs needs_prompt_trigger handler
+- Rebuilt fcm-agent and base-rootfs.img
+- All 108 tests pass with zero warnings
+- Commit: f5af605
+
 ## Next Tasks
 - Core PRD implementation complete
