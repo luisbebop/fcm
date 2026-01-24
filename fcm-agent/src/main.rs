@@ -180,23 +180,15 @@ fn handle_connection(mut stream: TcpStream) {
     // Get or create shell (persists across connections)
     let (master_fd, child_pid, is_reconnect) = ensure_shell_running();
 
-    if is_reconnect {
-        eprintln!("Reconnecting to existing shell (pid {})", child_pid);
-        // Send SIGWINCH to trigger prompt redraw
-        unsafe { libc::kill(child_pid, libc::SIGWINCH) };
-        // Send a newline to the shell to trigger a fresh prompt
-        // This ensures the user sees the prompt even if SIGWINCH isn't enough
-        unsafe {
-            libc::write(master_fd, b"\n".as_ptr() as *const libc::c_void, 1);
-        }
-    }
-
     // Set socket to non-blocking for polling
     stream.set_nonblocking(true).ok();
 
     let mut reader = BufReader::new(stream.try_clone().unwrap());
     let mut line_buf = String::new();
     let mut pty_buf = [0u8; 4096];
+
+    // Track if we need to trigger a prompt (on reconnect, after connection is established)
+    let mut needs_prompt_trigger = is_reconnect;
 
     loop {
         // Check if child exited (user typed 'exit')
@@ -250,6 +242,18 @@ fn handle_connection(mut stream: TcpStream) {
                     set_window_size(master_fd, cols, rows);
                     // Send SIGWINCH to child
                     unsafe { libc::kill(child_pid, libc::SIGWINCH) };
+
+                    // On reconnect, trigger prompt after first resize (connection established)
+                    if needs_prompt_trigger {
+                        // Small delay to let resize take effect
+                        thread::sleep(std::time::Duration::from_millis(50));
+                        // Send newline to trigger fresh prompt
+                        unsafe {
+                            libc::write(master_fd, b"\n".as_ptr() as *const libc::c_void, 1);
+                        }
+                        needs_prompt_trigger = false;
+                        eprintln!("Triggered prompt for reconnect");
+                    }
                 }
             }
             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
