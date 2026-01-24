@@ -1655,6 +1655,24 @@
 - All 99 tests pass with zero clippy warnings
 - Commit: 7b0cba5
 
+### Task 95: Rebuild Rootfs and Test Serial Console
+- Rebuilt base-rootfs.img with agetty and without fcm-agent
+- Build output: 848MB sparse, 2.0GB apparent size
+- Verified serial console functionality:
+  - Created test VM (cyber-vertex)
+  - Terminal server connection successful ({"success":true})
+  - Shell prompt received via PTY: `cyber-vertex:~#`
+  - Commands execute correctly: uname, ps, whoami all work
+  - agetty running properly on ttyS0 providing login shells
+- Verified console output (via Python test client):
+  - `uname -a` returns: Linux cyber-vertex 4.14.174 x86_64
+  - `ps aux` shows: init, rngd, dropbear, agetty, login, shell processes
+  - Alpine Linux edge OS correctly detected
+- Note: init log shows "agetty DIED" due to timing of check (1 second after start)
+  - This is a false alarm - agetty is actually running correctly
+  - The PID check happens before agetty fully initializes via setsid
+- No code changes (Dockerfile/init changes were in Task 94)
+- Task 94's serial console implementation verified working end-to-end
+
 ## Next Tasks
-- Rebuild base-rootfs.img with agetty (fcm-agent removed)
-- Test serial console with new VM
+- None currently - serial console implementation complete
