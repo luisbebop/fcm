@@ -1344,8 +1344,31 @@
 - Note: This is a PRD documentation update. Implementation will follow.
 - Commit: d1f06bc
 
+### Task 79: Implement fcm-agent Binary for VM
+- Created fcm-agent/ directory with separate Cargo.toml for minimal binary
+- fcm-agent/src/main.rs: ~220 lines of Rust, PTY manager implementation
+- Features:
+  - Listens on TCP port 7779 (internal network only)
+  - Spawns /bin/sh in PTY using libc::forkpty
+  - Proxies stdin/stdout via JSON framed messages (newline-delimited)
+  - Base64 encodes terminal I/O: {"stdin":"..."} and {"stdout":"..."}
+  - Handles terminal resize: {"resize":{"cols":N,"rows":N}}
+  - Sends exit notification: {"exit":N} when shell exits
+  - Automatically respawns shell after exit
+  - Non-blocking I/O for responsive terminal experience
+- Build optimizations: opt-level=z, LTO, codegen-units=1, strip=true
+- Built for x86_64-unknown-linux-musl target (~450KB static binary)
+- rootfs/Dockerfile:
+  - Removed tmux package (replaced by fcm-agent)
+  - Added COPY fcm-agent to /usr/local/bin/fcm-agent
+- rootfs/init:
+  - Added fcm-agent startup after dropbear SSH
+  - Logs to /var/log/init.log with PID tracking
+- Updated .gitignore to exclude fcm-agent/target/
+- All 103 tests pass with zero warnings
+- Commit: ef11ac4
+
 ## Next Tasks
-- Implement fcm-agent binary for VM (PTY manager)
 - Update session.rs to connect to fcm-agent instead of SSH+tmux
 - Update daemon.rs terminal server for new protocol
-- Update base rootfs image with fcm-agent
+- Rebuild base rootfs image with fcm-agent
