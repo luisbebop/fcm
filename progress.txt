@@ -2187,3 +2187,20 @@
 - Help output now shows: `-V, --version  Print version`
 - All 102 tests pass with zero clippy warnings
 - Commit: 96c314b
+
+### Task 121: Merge PR #1 - Add 'fcm remote' Command
+- Merged pull request #1 from feature/remote-command branch
+- **New command**: `fcm remote` - sets git remote to FCM deployment target
+  - Reads git URL from `.fcm` config (created by `fcm create`)
+  - Creates new remote if absent, updates existing one
+  - Default remote name: `origin`
+  - Custom name: `fcm remote -n deploy`
+- **Files added/modified**:
+  - src/client.rs: Added `set_remote()` function (+61 lines)
+  - src/main.rs: Added `Remote` command variant and handler (+12 lines)
+- Proper error handling:
+  - "No .fcm file found" when config missing
+  - "Not a git repository" when not in git repo
+- Colored output consistent with other fcm commands
+- All 102 tests pass with zero clippy warnings
+- Merge commit: 04f1fc6
