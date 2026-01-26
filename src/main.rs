@@ -21,6 +21,7 @@ const LOGO: &str = r#"
 
 #[derive(Parser)]
 #[command(name = "fcm")]
+#[command(version)]
 #[command(about = "Firecracker VM manager")]
 #[command(before_help = LOGO)]
 struct Cli {
