@@ -25,16 +25,59 @@ const BASE_ROOTFS_PATH: &str = "/var/lib/firecracker/base-rootfs.img";
 const DEFAULT_VCPU_COUNT: u8 = 1;
 const DEFAULT_MEM_SIZE_MIB: u32 = 1024;
 
+// Word lists for VM name generation (100+ each = 10,000+ unique combinations)
 const ADJECTIVES: &[&str] = &[
-    "cosmic", "quantum", "stellar", "solar", "lunar", "orbital", "nebula",
+    // Space theme (20)
+    "cosmic", "quantum", "stellar", "solar", "lunar", "orbital", "nebular",
+    "galactic", "astral", "celestial", "meteoric", "planetary", "void",
+    "radiant", "blazing", "glowing", "brilliant", "luminous", "shimmering", "spectral",
+    // Tech theme (20)
     "cyber", "digital", "neural", "binary", "atomic", "photon", "plasma",
+    "electric", "magnetic", "sonic", "laser", "nano", "micro", "crypto",
+    "hyper", "turbo", "chrome", "neon", "pixel", "static",
+    // Nature/mineral theme (20)
     "misty", "crystal", "amber", "coral", "forest", "arctic", "alpine",
+    "azure", "emerald", "sapphire", "ruby", "golden", "silver", "copper",
+    "bronze", "iron", "steel", "obsidian", "jade", "onyx",
+    // Weather theme (15)
+    "stormy", "cloudy", "sunny", "snowy", "windy", "foggy", "hazy",
+    "frosty", "icy", "dusty", "dewy", "humid", "arid", "tropical", "polar",
+    // Descriptive theme (20)
+    "swift", "rapid", "silent", "hidden", "ancient", "eternal", "infinite",
+    "mighty", "noble", "brave", "wild", "bold", "fierce", "gentle",
+    "calm", "serene", "vivid", "stark", "subtle", "primal",
+    // Color theme (15)
+    "crimson", "scarlet", "violet", "indigo", "cobalt", "teal", "cyan",
+    "magenta", "ivory", "ebony", "pearl", "opal", "slate", "ochre", "umber",
+    // Time theme (10)
+    "twilight", "midnight", "dawn", "dusk", "vernal", "autumn", "winter",
+    "summer", "spring", "nocturnal",
 ];
 
 const NOUNS: &[&str] = &[
+    // Space theme (20)
     "nova", "comet", "pulsar", "quasar", "aurora", "eclipse", "meteor",
+    "star", "moon", "planet", "galaxy", "cosmos", "orbit", "zenith",
+    "horizon", "equinox", "solstice", "vortex", "singularity", "spectrum",
+    // Tech theme (20)
     "circuit", "matrix", "nexus", "vertex", "tensor", "vector", "cipher",
+    "node", "core", "grid", "mesh", "link", "port", "gate",
+    "loop", "stack", "cache", "proxy", "beacon", "signal",
+    // Terrain theme (20)
     "river", "canyon", "glacier", "meadow", "reef", "grove", "peak",
+    "valley", "delta", "basin", "ridge", "cliff", "shore", "bay",
+    "cove", "lake", "pond", "stream", "brook", "spring",
+    // Animal theme (20)
+    "wolf", "bear", "eagle", "hawk", "falcon", "raven", "fox",
+    "deer", "elk", "moose", "otter", "badger", "lynx", "puma",
+    "tiger", "lion", "panther", "jaguar", "viper", "cobra",
+    // Plant theme (14)
+    "pine", "oak", "cedar", "birch", "maple", "fern", "moss",
+    "ivy", "sage", "willow", "lotus", "orchid", "lily", "rose",
+    // Element theme (20)
+    "flame", "ember", "spark", "blaze", "frost", "storm", "thunder",
+    "lightning", "rain", "snow", "mist", "fog", "cloud", "wave",
+    "tide", "current", "breeze", "gust", "zephyr", "tempest",
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -212,6 +255,53 @@ pub fn random_name() -> String {
     let adj = ADJECTIVES[rng.gen_range(0..ADJECTIVES.len())];
     let noun = NOUNS[rng.gen_range(0..NOUNS.len())];
     format!("{}-{}", adj, noun)
+}
+
+/// Generate a unique random name that doesn't conflict with existing VMs
+/// Returns None if all combinations are exhausted (very unlikely with 10,000+ combinations)
+pub fn unique_random_name() -> Option<String> {
+    // Get all existing VM names
+    let existing_names: std::collections::HashSet<String> = list_vms()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|vm| vm.name)
+        .collect();
+
+    // Total possible combinations
+    let max_combinations = ADJECTIVES.len() * NOUNS.len();
+
+    // If we've used all names, return None
+    if existing_names.len() >= max_combinations {
+        return None;
+    }
+
+    // Try random names first (fast path for most cases)
+    let mut rng = rand::thread_rng();
+    for _ in 0..100 {
+        let adj = ADJECTIVES[rng.gen_range(0..ADJECTIVES.len())];
+        let noun = NOUNS[rng.gen_range(0..NOUNS.len())];
+        let name = format!("{}-{}", adj, noun);
+        if !existing_names.contains(&name) {
+            return Some(name);
+        }
+    }
+
+    // Fallback: iterate through all combinations to find an unused one
+    for adj in ADJECTIVES {
+        for noun in NOUNS {
+            let name = format!("{}-{}", adj, noun);
+            if !existing_names.contains(&name) {
+                return Some(name);
+            }
+        }
+    }
+
+    None
+}
+
+/// Get the total number of possible unique VM names
+pub fn max_unique_names() -> usize {
+    ADJECTIVES.len() * NOUNS.len()
 }
 
 /// List all VMs by reading config files from BASE_DIR, sorted by creation date
@@ -417,7 +507,15 @@ pub fn create_vm(name: Option<String>, expose_port: Option<u16>, ssh_public_key:
     let ip = network::allocate_ip()?;
 
     // Generate name first (needed for domain)
-    let vm_name = name.unwrap_or_else(random_name);
+    let vm_name = match name {
+        Some(n) => n,
+        None => unique_random_name().ok_or_else(|| {
+            VmError::ResourceNotAvailable(format!(
+                "No unique VM names available (max {} VMs)",
+                max_unique_names()
+            ))
+        })?,
+    };
 
     // Create VM config
     let expose_config = if let Some(port) = expose_port {
@@ -850,6 +948,37 @@ mod tests {
         assert_eq!(parts.len(), 2);
         assert!(ADJECTIVES.contains(&parts[0]));
         assert!(NOUNS.contains(&parts[1]));
+    }
+
+    #[test]
+    fn test_max_unique_names_exceeds_10000() {
+        // Verify we have at least 10,000 unique name combinations
+        let max = max_unique_names();
+        assert!(max >= 10000, "Expected at least 10,000 combinations, got {}", max);
+    }
+
+    #[test]
+    fn test_word_list_sizes() {
+        // Verify we have enough words to support 10,000+ combinations
+        // sqrt(10000) = 100, so we need at least 100 words in each list
+        assert!(ADJECTIVES.len() >= 100, "Expected at least 100 adjectives, got {}", ADJECTIVES.len());
+        assert!(NOUNS.len() >= 100, "Expected at least 100 nouns, got {}", NOUNS.len());
+    }
+
+    #[test]
+    fn test_no_duplicate_adjectives() {
+        let mut seen = std::collections::HashSet::new();
+        for adj in ADJECTIVES {
+            assert!(seen.insert(*adj), "Duplicate adjective: {}", adj);
+        }
+    }
+
+    #[test]
+    fn test_no_duplicate_nouns() {
+        let mut seen = std::collections::HashSet::new();
+        for noun in NOUNS {
+            assert!(seen.insert(*noun), "Duplicate noun: {}", noun);
+        }
     }
 
     #[test]
