@@ -533,6 +533,67 @@ pub fn destroy_vm(vm: &str) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// Set git remote to FCM deployment target
+pub fn set_remote(remote_name: &str) -> Result<(), Box<dyn Error>> {
+    let config = load_local_config()?;
+
+    let git_url = config
+        .git
+        .ok_or("No git URL in .fcm config. Run 'fcm create' first.")?;
+
+    // Check if we're in a git repo
+    let status = std::process::Command::new("git")
+        .args(["rev-parse", "--git-dir"])
+        .output()?;
+
+    if !status.status.success() {
+        return Err("Not a git repository. Run 'git init' first.".into());
+    }
+
+    // Check if remote already exists
+    let existing = std::process::Command::new("git")
+        .args(["remote", "get-url", remote_name])
+        .output()?;
+
+    if existing.status.success() {
+        // Update existing remote
+        let result = std::process::Command::new("git")
+            .args(["remote", "set-url", remote_name, &git_url])
+            .status()?;
+        if !result.success() {
+            return Err("Failed to update git remote".into());
+        }
+        println!(
+            "{d}Updated remote '{w}{}{d}':{reset} {b}{}{reset}",
+            remote_name,
+            git_url,
+            d = GRAY,
+            w = WHITE,
+            b = BLUE,
+            reset = RESET
+        );
+    } else {
+        // Add new remote
+        let result = std::process::Command::new("git")
+            .args(["remote", "add", remote_name, &git_url])
+            .status()?;
+        if !result.success() {
+            return Err("Failed to add git remote".into());
+        }
+        println!(
+            "{d}Added remote '{w}{}{d}':{reset} {b}{}{reset}",
+            remote_name,
+            git_url,
+            d = GRAY,
+            w = WHITE,
+            b = BLUE,
+            reset = RESET
+        );
+    }
+
+    Ok(())
+}
+
 /// Response from /auth/me endpoint
 #[derive(Debug, Deserialize)]
 struct AuthMeResponse {
