@@ -210,7 +210,7 @@ sudo usermod -aG docker $USER
 
 ```bash
 # Clone the repo
-git clone https://github.com/anthropics/fcm.git
+git clone https://github.com/luisbebop/fcm.git
 cd fcm
 
 # Build
