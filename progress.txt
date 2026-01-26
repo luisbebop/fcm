@@ -2145,3 +2145,37 @@
 - Changed clone URL from `https://github.com/anthropics/fcm.git` to `https://github.com/luisbebop/fcm.git`
 - All 98 tests pass
 - Commit: 7aa588e
+
+### Task 119: Expand Word Lists to 10,000+ Unique VM Names
+- Previously only 441 combinations (21 adjectives × 21 nouns), causing duplicate names
+- Expanded ADJECTIVES from 21 to 120 words across 7 themes:
+  - Space (20): cosmic, quantum, stellar, galactic, astral, celestial, etc.
+  - Tech (20): cyber, digital, neural, binary, atomic, photon, etc.
+  - Nature/mineral (20): misty, crystal, amber, coral, emerald, jade, etc.
+  - Weather (15): stormy, cloudy, sunny, snowy, frosty, tropical, etc.
+  - Descriptive (20): swift, rapid, silent, ancient, eternal, fierce, etc.
+  - Color (15): crimson, scarlet, violet, indigo, cobalt, teal, etc.
+  - Time (10): twilight, midnight, dawn, dusk, vernal, autumn, etc.
+- Expanded NOUNS from 21 to 114 words across 6 themes:
+  - Space (20): nova, comet, pulsar, quasar, aurora, galaxy, etc.
+  - Tech (20): circuit, matrix, nexus, vertex, tensor, cipher, etc.
+  - Terrain (20): river, canyon, glacier, meadow, reef, valley, etc.
+  - Animal (20): wolf, bear, eagle, hawk, falcon, tiger, etc.
+  - Plant (14): pine, oak, cedar, birch, maple, fern, lotus, etc.
+  - Element (20): flame, ember, spark, blaze, frost, storm, etc.
+- Total combinations: 120 × 114 = 13,680 unique names
+- Added `unique_random_name()` function:
+  - Checks existing VM names before generating
+  - Fast path: tries 100 random combinations first
+  - Fallback: iterates all combinations to find unused name
+  - Returns None if all names exhausted (error in create_vm)
+- Added `max_unique_names()` function for capacity checking
+- Updated `create_vm()` to use `unique_random_name()`
+- Added 5 new tests:
+  - test_max_unique_names_exceeds_10000
+  - test_word_list_sizes (verifies 100+ in each list)
+  - test_no_duplicate_adjectives
+  - test_no_duplicate_nouns
+  - (existing test_random_name_format updated)
+- All 102 tests pass with zero clippy warnings
+- Commit: bd70e1b
