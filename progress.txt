@@ -2140,3 +2140,8 @@
   - Quick Start: Fixed console command to include VM name
 - All 98 tests pass with zero clippy warnings
 - Commit: 95ee46d
+
+### Task 118: Fix GitHub Repository URL in README
+- Changed clone URL from `https://github.com/anthropics/fcm.git` to `https://github.com/luisbebop/fcm.git`
+- All 98 tests pass
+- Commit: 7aa588e
