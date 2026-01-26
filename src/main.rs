@@ -63,6 +63,12 @@ enum Commands {
         /// VM name or ID (defaults to .fcm config)
         vm: Option<String>,
     },
+    /// Set git remote to FCM deployment target
+    Remote {
+        /// Remote name (default: origin)
+        #[arg(short, long, default_value = "origin")]
+        name: String,
+    },
     /// Authenticate with Google
     Login,
     /// Remove authentication token
@@ -156,6 +162,12 @@ fn main() {
             };
             if let Err(e) = client::destroy_vm(&vm_name) {
                 eprintln!("Error destroying VM: {}", e);
+                std::process::exit(1);
+            }
+        }
+        Some(Commands::Remote { name }) => {
+            if let Err(e) = client::set_remote(&name) {
+                eprintln!("Error setting remote: {}", e);
                 std::process::exit(1);
             }
         }
