@@ -106,32 +106,47 @@ fn generate_caddy_block(domain: &str, vm_ip: &str, port: u16) -> String {
 
 /// Generate Caddy config block for the fcm status page with WebSocket console support
 /// This creates a block that routes:
+/// - /vms*, /auth/*, /health -> localhost:7777 (API daemon)
 /// - /console -> localhost:7778 (WebSocket terminal)
 /// - /* -> localhost:7780 (status page)
-pub fn generate_fcm_domain_block(domain: &str, status_port: u16, console_port: u16) -> String {
+pub fn generate_fcm_domain_block(domain: &str, api_port: u16, status_port: u16, console_port: u16) -> String {
     format!(
         r#"
 # fcm-managed: {}
 {} {{
+    # API routes -> daemon
+    handle /vms* {{
+        reverse_proxy localhost:{}
+    }}
+    handle /auth/* {{
+        reverse_proxy localhost:{}
+    }}
+    handle /health {{
+        reverse_proxy localhost:{}
+    }}
+
+    # WebSocket console -> terminal server
     handle /console {{
         reverse_proxy localhost:{}
     }}
+
+    # Status page and web UI
     handle {{
         reverse_proxy localhost:{}
     }}
 }}
 "#,
-        domain, domain, console_port, status_port
+        domain, domain, api_port, api_port, api_port, console_port, status_port
     )
 }
 
 /// Add the fcm status page domain with WebSocket console support
-pub fn add_fcm_domain(domain: &str, status_port: u16, console_port: u16) -> Result<()> {
-    add_fcm_domain_to_file(domain, status_port, console_port, CADDYFILE_PATH)
+pub fn add_fcm_domain(domain: &str, api_port: u16, status_port: u16, console_port: u16) -> Result<()> {
+    add_fcm_domain_to_file(domain, api_port, status_port, console_port, CADDYFILE_PATH)
 }
 
 /// Add the fcm status page domain to a specific Caddyfile (for testing)
-pub fn add_fcm_domain_to_file(domain: &str, status_port: u16, console_port: u16, caddyfile_path: &str) -> Result<()> {
+pub fn add_fcm_domain_to_file(domain: &str, api_port: u16, status_port: u16, console_port: u16, caddyfile_path: &str) -> Result<()> {
     // Ensure parent directory exists
     if let Some(parent) = std::path::Path::new(caddyfile_path).parent() {
         if !parent.exists() {
@@ -150,7 +165,7 @@ pub fn add_fcm_domain_to_file(domain: &str, status_port: u16, console_port: u16,
     }
 
     // Append new block
-    let block = generate_fcm_domain_block(domain, status_port, console_port);
+    let block = generate_fcm_domain_block(domain, api_port, status_port, console_port);
     let new_content = format!("{}{}", existing, block);
 
     fs::write(caddyfile_path, new_content)?;
@@ -465,10 +480,14 @@ other.com {
 
     #[test]
     fn test_generate_fcm_domain_block() {
-        let block = generate_fcm_domain_block("fcm.tryforge.sh", 7780, 7778);
+        let block = generate_fcm_domain_block("fcm.tryforge.sh", 7777, 7780, 7778);
         assert!(block.contains("# fcm-managed: fcm.tryforge.sh"));
         assert!(block.contains("fcm.tryforge.sh {"));
+        assert!(block.contains("handle /vms* {"));
+        assert!(block.contains("handle /auth/* {"));
+        assert!(block.contains("handle /health {"));
         assert!(block.contains("handle /console {"));
+        assert!(block.contains("reverse_proxy localhost:7777"));
         assert!(block.contains("reverse_proxy localhost:7778"));
         assert!(block.contains("reverse_proxy localhost:7780"));
     }
@@ -478,11 +497,13 @@ other.com {
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path().to_str().unwrap();
 
-        add_fcm_domain_to_file("fcm.tryforge.sh", 7780, 7778, path).unwrap();
+        add_fcm_domain_to_file("fcm.tryforge.sh", 7777, 7780, 7778, path).unwrap();
 
         let content = fs::read_to_string(path).unwrap();
         assert!(content.contains("# fcm-managed: fcm.tryforge.sh"));
+        assert!(content.contains("handle /vms* {"));
         assert!(content.contains("handle /console {"));
+        assert!(content.contains("reverse_proxy localhost:7777"));
         assert!(content.contains("reverse_proxy localhost:7778"));
         assert!(content.contains("reverse_proxy localhost:7780"));
     }

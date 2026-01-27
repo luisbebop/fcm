@@ -2598,7 +2598,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     let status_domain = caddy::generate_domain("fcm", &server_ip);
     println!("Setting up status page at https://{}", status_domain);
     println!("WebSocket console available at wss://{}/console", status_domain);
-    if let Err(e) = caddy::add_fcm_domain(&status_domain, STATUS_PAGE_PORT, 7778) {
+    if let Err(e) = caddy::add_fcm_domain(&status_domain, 7777, STATUS_PAGE_PORT, 7778) {
         eprintln!("Warning: Failed to add status page to Caddy: {}", e);
     } else if let Err(e) = caddy::reload() {
         eprintln!("Warning: Failed to reload Caddy: {}", e);
