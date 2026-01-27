@@ -2226,3 +2226,11 @@
   - scripts/build-releases.sh: Download command URLs
 - All 102 tests pass with zero clippy warnings
 - Commit: e45a2f8
+
+### Task 122b: Update VM Config Files for tryforge.sh
+- Updated all 29 existing VM config.json files to use tryforge.sh domains
+- Fixed Caddyfile to use tryforge.sh instead of sslip.io for VM domains
+- Updated deploy instructions on status page to show `root@tryforge.sh:vm-name.git`
+- Fixed duplicate Caddy block detection to check for domain existence without marker
+- Prevents daemon from adding duplicate fcm.tryforge.sh blocks on restart
+- Commit: 6e91a41, 97849fd
