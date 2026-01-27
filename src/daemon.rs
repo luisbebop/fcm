@@ -722,7 +722,7 @@ async function createVm() {
 $ fcm create
 $ git init && echo "web: python3 -m http.server 3000" > Procfile
 $ git add . && git commit -m "init"
-$ git remote add origin root@{}:vm-name.git
+$ git remote add origin root@tryforge.sh:vm-name.git
 $ git push origin main</pre>
 
     <h2>Status</h2>
@@ -745,7 +745,6 @@ $ git push origin main</pre>
 </html>"##,
         auth_section,
         download_section,
-        stats.server_ip,
         stats.format_uptime(),
         running_count,
         stopped_count,
