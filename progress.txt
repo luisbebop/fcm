@@ -2234,3 +2234,28 @@
 - Fixed duplicate Caddy block detection to check for domain existence without marker
 - Prevents daemon from adding duplicate fcm.tryforge.sh blocks on restart
 - Commit: 6e91a41, 97849fd
+
+### Task 123: Remove FCM_HOST Requirement
+- CLI now defaults to `fcm.tryforge.sh` production domain
+- FCM_HOST env var is now optional, only needed for local development
+- **Client changes (client.rs):**
+  - `daemon_url()` defaults to `https://fcm.tryforge.sh`
+  - `status_url()` defaults to `https://fcm.tryforge.sh`
+  - `status_page_url()` defaults to `https://fcm.tryforge.sh`
+  - Removed FCM_HOST check in `login()` function
+  - FCM_HOST=127.0.0.1:7777 or localhost can override for local dev
+- **Console changes (console.rs):**
+  - `get_websocket_url_base()` defaults to `wss://fcm.tryforge.sh/console`
+  - `get_api_url_base()` defaults to `https://fcm.tryforge.sh`
+  - Same localhost override behavior for local dev
+- **README updates:**
+  - Removed FCM_HOST from Admin Token setup section
+  - Simplified Client Configuration section (no env vars needed)
+  - Changed FCM_HOST from Required to Optional in env vars table
+  - Updated Troubleshooting section
+- **Test updates:**
+  - Updated tests to expect tryforge.sh as default
+  - Added tests for localhost override behavior
+- Simplified user experience: just download binary and run `fcm login`
+- All 102 tests pass with zero clippy warnings
+- Commit: 435b4d8
