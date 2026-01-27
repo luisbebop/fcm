@@ -1053,7 +1053,7 @@ mod tests {
         let config = LocalConfig {
             name: "cosmic-nova".to_string(),
             url: Some("https://cosmic-nova.tryforge.sh".to_string()),
-            git: Some("root@64.34.93.45:cosmic-nova.git".to_string()),
+            git: Some("root@tryforge.sh:cosmic-nova.git".to_string()),
         };
         let json = serde_json::to_string(&config).unwrap();
         assert!(json.contains("cosmic-nova"));
