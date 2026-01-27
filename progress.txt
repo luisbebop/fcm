@@ -2274,3 +2274,18 @@
 - Manually fixed /etc/caddy/Caddyfile on server
 - All 102 tests pass with zero clippy warnings
 - Commit: 8af8a86
+
+### Task 123c: Use git.tryforge.sh for Git URLs
+- Created DNS-only A record `git.tryforge.sh` → `64.34.93.45` (not proxied through Cloudflare)
+- SSH (port 22) doesn't work through Cloudflare proxy, only HTTP/HTTPS
+- Git URLs now use `root@git.tryforge.sh:vm-name.git` instead of IP address
+- Updated `daemon.rs` to use hardcoded `git.tryforge.sh` for git clone URLs
+- Cleaner user experience with domain instead of IP
+- All 102 tests pass
+- Commit: f5dfeed
+
+### Task 123 Summary: Domain Migration & CLI Simplification
+- **Task 123**: Removed FCM_HOST requirement, CLI defaults to `fcm.tryforge.sh`
+- **Task 123b**: Fixed Caddy routing - API routes now go to daemon (7777), not status page (7780)
+- **Task 123c**: Git URLs use `git.tryforge.sh` (DNS-only record for SSH access)
+- Commits: 435b4d8, 8af8a86, f5dfeed
