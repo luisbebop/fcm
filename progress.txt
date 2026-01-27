@@ -2259,3 +2259,18 @@
 - Simplified user experience: just download binary and run `fcm login`
 - All 102 tests pass with zero clippy warnings
 - Commit: 435b4d8
+
+### Task 123b: Fix Caddy API Routing
+- Fixed issue where CLI commands returned "Failed to read JSON" error
+- Root cause: All routes to fcm.tryforge.sh went to status page (7780) instead of API (7777)
+- Updated `generate_fcm_domain_block()` in caddy.rs to include API routes:
+  - `/vms*` → localhost:7777 (API daemon)
+  - `/auth/*` → localhost:7777 (API daemon)
+  - `/health` → localhost:7777 (API daemon)
+  - `/console` → localhost:7778 (WebSocket terminal)
+  - `/*` → localhost:7780 (status page)
+- Updated function signature to include `api_port` parameter
+- Updated tests to verify API routes are included
+- Manually fixed /etc/caddy/Caddyfile on server
+- All 102 tests pass with zero clippy warnings
+- Commit: 8af8a86
