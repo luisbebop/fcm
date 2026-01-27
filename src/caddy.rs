@@ -142,13 +142,10 @@ pub fn add_fcm_domain_to_file(domain: &str, status_port: u16, console_port: u16,
     // Read existing Caddyfile or create empty
     let existing = fs::read_to_string(caddyfile_path).unwrap_or_default();
 
-    // Check if domain already exists
-    if existing.contains(&format!("# fcm-managed: {}", domain)) {
-        // Remove old block first
-        let cleaned = remove_site_block(&existing, domain);
-        let block = generate_fcm_domain_block(domain, status_port, console_port);
-        let new_content = format!("{}{}", cleaned, block);
-        fs::write(caddyfile_path, new_content)?;
+    // Check if domain block already exists (with or without fcm-managed marker)
+    let domain_block_pattern = format!("{} {{", domain);
+    if existing.contains(&domain_block_pattern) {
+        // Domain already configured, skip to avoid duplicates
         return Ok(());
     }
 
