@@ -999,9 +999,12 @@ pub struct ExposeResponse {
 
 impl From<&VmConfig> for VmResponse {
     fn from(config: &VmConfig) -> Self {
-        // Get git URL if repo exists (using tryforge.sh domain)
+        // Get git URL if repo exists (using server IP for SSH access)
+        // Note: Can't use tryforge.sh domain because Cloudflare doesn't proxy SSH
         let git_url = if crate::git::repo_exists(&config.name) {
-            Some(crate::git::get_clone_url(&config.name, "tryforge.sh"))
+            crate::caddy::get_server_ip()
+                .ok()
+                .map(|ip| crate::git::get_clone_url(&config.name, &ip))
         } else {
             None
         };
