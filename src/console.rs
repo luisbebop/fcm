@@ -205,14 +205,18 @@ fn url_encode(s: &str) -> String {
 }
 
 /// Get the WebSocket URL base for console connections
-/// Uses FCM_HOST env var to determine the server
+/// Defaults to tryforge.sh, can be overridden with FCM_HOST for local dev
 fn get_websocket_url_base() -> String {
-    if env::var("FCM_HOST").is_ok() {
-        // Use tryforge.sh domain when FCM_HOST is set
-        "wss://fcm.tryforge.sh/console".to_string()
+    if let Ok(host) = env::var("FCM_HOST") {
+        // Local development or custom server
+        if host.contains("127.0.0.1") || host.contains("localhost") {
+            "ws://127.0.0.1:7778/console".to_string()
+        } else {
+            "wss://fcm.tryforge.sh/console".to_string()
+        }
     } else {
-        // Local development - use localhost without TLS
-        "ws://127.0.0.1:7778/console".to_string()
+        // Default to production
+        "wss://fcm.tryforge.sh/console".to_string()
     }
 }
 
@@ -250,13 +254,18 @@ fn load_token() -> Result<String, ConsoleError> {
 }
 
 /// Get the HTTP API base URL for file uploads
+/// Defaults to tryforge.sh, can be overridden with FCM_HOST for local dev
 fn get_api_url_base() -> String {
-    if env::var("FCM_HOST").is_ok() {
-        // Use tryforge.sh domain when FCM_HOST is set
-        "https://fcm.tryforge.sh".to_string()
+    if let Ok(host) = env::var("FCM_HOST") {
+        // Local development or custom server
+        if host.contains("127.0.0.1") || host.contains("localhost") {
+            "http://127.0.0.1:7777".to_string()
+        } else {
+            "https://fcm.tryforge.sh".to_string()
+        }
     } else {
-        // Local development
-        "http://127.0.0.1:7777".to_string()
+        // Default to production
+        "https://fcm.tryforge.sh".to_string()
     }
 }
 
@@ -676,21 +685,23 @@ mod tests {
     fn test_websocket_url_default() {
         env::remove_var("FCM_HOST");
         let url = get_websocket_url_base();
-        assert_eq!(url, "ws://127.0.0.1:7778/console");
+        // Default is now tryforge.sh production URL
+        assert_eq!(url, "wss://fcm.tryforge.sh/console");
     }
 
     #[test]
-    fn test_websocket_url_from_env() {
-        env::set_var("FCM_HOST", "192.168.1.100:7777");
+    fn test_websocket_url_local_dev() {
+        // FCM_HOST=localhost overrides for local development
+        env::set_var("FCM_HOST", "127.0.0.1:7777");
         let url = get_websocket_url_base();
-        assert!(url.contains("fcm.tryforge.sh"));
-        assert!(url.starts_with("wss://"));
+        assert_eq!(url, "ws://127.0.0.1:7778/console");
         env::remove_var("FCM_HOST");
     }
 
     #[test]
-    fn test_websocket_url_with_scheme() {
-        env::set_var("FCM_HOST", "http://10.0.0.5:7777");
+    fn test_websocket_url_remote() {
+        // Non-localhost FCM_HOST still uses tryforge.sh
+        env::set_var("FCM_HOST", "192.168.1.100:7777");
         let url = get_websocket_url_base();
         assert!(url.contains("fcm.tryforge.sh"));
         assert!(url.starts_with("wss://"));
@@ -822,15 +833,16 @@ mod tests {
     fn test_api_url_default() {
         env::remove_var("FCM_HOST");
         let url = get_api_url_base();
-        assert_eq!(url, "http://127.0.0.1:7777");
+        // Default is now tryforge.sh production URL
+        assert_eq!(url, "https://fcm.tryforge.sh");
     }
 
     #[test]
-    fn test_api_url_from_env() {
-        env::set_var("FCM_HOST", "192.168.1.100:7777");
+    fn test_api_url_local_dev() {
+        // FCM_HOST=localhost overrides for local development
+        env::set_var("FCM_HOST", "127.0.0.1:7777");
         let url = get_api_url_base();
-        assert!(url.contains("fcm.tryforge.sh"));
-        assert!(url.starts_with("https://"));
+        assert_eq!(url, "http://127.0.0.1:7777");
         env::remove_var("FCM_HOST");
     }
 }

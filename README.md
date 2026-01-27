@@ -140,9 +140,6 @@ The daemon generates an admin token at `/var/lib/firecracker/.token` on first ru
 # Copy the admin token from the server
 scp root@yourserver:/var/lib/firecracker/.token ~/.fcm-token
 
-# Set the server address
-export FCM_HOST="64.34.93.45:7777"
-
 # Test it
 fcm ls
 ```
@@ -336,15 +333,11 @@ On your local machine:
 curl -sL https://fcm.tryforge.sh/releases/fcm-macos-arm64.tar.gz | tar xz
 sudo mv fcm /usr/local/bin/
 
-# Set the server address
-export FCM_HOST="64.34.93.45:7777"
-
-# Add to your shell profile
-echo 'export FCM_HOST="64.34.93.45:7777"' >> ~/.zshrc
-
 # Login with Google
 fcm login
 ```
+
+The CLI automatically connects to `fcm.tryforge.sh`. No configuration needed.
 
 ## Architecture
 
@@ -457,8 +450,8 @@ Each VM gets:
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `FCM_HOST` | Yes | Daemon address (e.g., `64.34.93.45:7777`) |
 | `FCM_TOKEN` | No | Auth token (alternative to `~/.fcm-token`) |
+| `FCM_HOST` | No | Override server address (default: `fcm.tryforge.sh`, use `127.0.0.1:7777` for local dev) |
 
 ## Files and Directories
 
@@ -493,14 +486,11 @@ Each VM gets:
 
 **"Connection refused" when running fcm commands**
 ```bash
-# Check if daemon is running
+# Check if daemon is running on the server
 pgrep -a fcm
 
-# Check if FCM_HOST is set
-echo $FCM_HOST
-
-# Test API connectivity
-curl -v http://$FCM_HOST/vms
+# Test API connectivity (default: fcm.tryforge.sh)
+curl -v https://fcm.tryforge.sh/health
 ```
 
 **"Cannot connect to terminal server"**

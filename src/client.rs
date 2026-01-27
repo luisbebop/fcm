@@ -9,7 +9,8 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 use std::path::PathBuf;
 
-const DEFAULT_DAEMON_URL: &str = "http://127.0.0.1:7777";
+/// Default production URL (tryforge.sh domain)
+const DEFAULT_DAEMON_URL: &str = "https://fcm.tryforge.sh";
 /// Port for local CLI login callback server
 const CLI_LOGIN_PORT: u16 = 9876;
 const LOCAL_CONFIG_FILE: &str = ".fcm";
@@ -22,7 +23,13 @@ struct LocalConfig {
     git: Option<String>,
 }
 
-/// Get the daemon URL from FCM_HOST env var or use default
+/// Get the daemon URL from FCM_HOST env var or use default (tryforge.sh)
+///
+/// FCM_HOST can be used to override for local development or custom servers.
+/// Examples:
+///   - Not set: uses https://fcm.tryforge.sh (default)
+///   - FCM_HOST=127.0.0.1:7777: uses http://127.0.0.1:7777 (local dev)
+///   - FCM_HOST=https://custom.example.com: uses as-is
 fn daemon_url() -> String {
     if let Ok(host) = env::var("FCM_HOST") {
         if host.starts_with("http://") || host.starts_with("https://") {
@@ -36,14 +43,20 @@ fn daemon_url() -> String {
 }
 
 /// Get the status page URL (used for sessions API)
-/// This is the fcm.tryforge.sh URL that Caddy proxies
+/// Defaults to tryforge.sh, can be overridden with FCM_HOST for local dev
 fn status_url() -> String {
-    if env::var("FCM_HOST").is_ok() {
-        // Use tryforge.sh domain when FCM_HOST is set
-        "https://fcm.tryforge.sh".to_string()
+    if let Ok(host) = env::var("FCM_HOST") {
+        // Local development or custom server
+        if host.contains("127.0.0.1") || host.contains("localhost") {
+            "http://127.0.0.1:7780".to_string()
+        } else if host.starts_with("http://") || host.starts_with("https://") {
+            host
+        } else {
+            format!("https://{}", host)
+        }
     } else {
-        // Local development - use localhost status server
-        "http://127.0.0.1:7780".to_string()
+        // Default to production
+        "https://fcm.tryforge.sh".to_string()
     }
 }
 
@@ -597,13 +610,19 @@ struct AuthMeResponse {
 }
 
 /// Get FCM status page URL from FCM_HOST
+/// Get the status page URL for OAuth login
+/// Defaults to tryforge.sh, can be overridden with FCM_HOST for local dev
 fn status_page_url() -> String {
-    if env::var("FCM_HOST").is_ok() {
-        // Use tryforge.sh domain when FCM_HOST is set
-        "https://fcm.tryforge.sh".to_string()
+    if let Ok(host) = env::var("FCM_HOST") {
+        // Local development or custom server
+        if host.contains("127.0.0.1") || host.contains("localhost") {
+            "http://127.0.0.1:7780".to_string()
+        } else {
+            "https://fcm.tryforge.sh".to_string()
+        }
     } else {
-        // Default to localhost - won't work for OAuth but needed for local testing
-        "http://127.0.0.1:7780".to_string()
+        // Default to production
+        "https://fcm.tryforge.sh".to_string()
     }
 }
 
@@ -658,11 +677,6 @@ pub fn login() -> Result<(), Box<dyn Error>> {
     }
 
     let base_url = status_page_url();
-
-    // Check FCM_HOST is set for remote connections
-    if !base_url.contains("tryforge.sh") {
-        return Err("FCM_HOST must be set to the server IP (e.g., FCM_HOST=64.34.93.45:7777)".into());
-    }
 
     // Start local server to receive callback
     let listener = TcpListener::bind(format!("127.0.0.1:{}", CLI_LOGIN_PORT))
@@ -1013,14 +1027,16 @@ mod tests {
     #[serial]
     fn test_daemon_url_default() {
         env::remove_var("FCM_HOST");
-        assert_eq!(daemon_url(), "http://127.0.0.1:7777");
+        // Default is now tryforge.sh production URL
+        assert_eq!(daemon_url(), "https://fcm.tryforge.sh");
     }
 
     #[test]
     #[serial]
-    fn test_daemon_url_from_env() {
-        env::set_var("FCM_HOST", "192.168.1.100:7777");
-        assert_eq!(daemon_url(), "http://192.168.1.100:7777");
+    fn test_daemon_url_local_dev() {
+        // FCM_HOST can override for local development
+        env::set_var("FCM_HOST", "127.0.0.1:7777");
+        assert_eq!(daemon_url(), "http://127.0.0.1:7777");
         env::remove_var("FCM_HOST");
     }
 
