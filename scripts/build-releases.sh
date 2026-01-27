@@ -12,9 +12,8 @@ export CARGO_HOME="/home/ubuntu/.cargo"
 echo "==> Building Linux binary..."
 cargo build --release 2>&1 | tail -5
 
-echo "==> Building macOS binaries..."
+echo "==> Building macOS ARM64 (Apple Silicon) binary..."
 cargo zigbuild --release --target aarch64-apple-darwin 2>&1 | grep -E "Compiling|Finished|error" | tail -3
-cargo zigbuild --release --target x86_64-apple-darwin 2>&1 | grep -E "Compiling|Finished|error" | tail -3
 
 echo "==> Cleaning old releases..."
 RELEASES_DIR=/var/lib/firecracker/releases
@@ -28,13 +27,6 @@ cp target/aarch64-apple-darwin/release/fcm "$TEMP_DIR/fcm"
 chmod +x "$TEMP_DIR/fcm"
 tar -czf "$TEMP_DIR/fcm-macos-arm64.tar.gz" -C "$TEMP_DIR" fcm
 sudo mv "$TEMP_DIR/fcm-macos-arm64.tar.gz" "$RELEASES_DIR/"
-rm "$TEMP_DIR/fcm"
-
-# macOS x64 (Intel)
-cp target/x86_64-apple-darwin/release/fcm "$TEMP_DIR/fcm"
-chmod +x "$TEMP_DIR/fcm"
-tar -czf "$TEMP_DIR/fcm-macos-x64.tar.gz" -C "$TEMP_DIR" fcm
-sudo mv "$TEMP_DIR/fcm-macos-x64.tar.gz" "$RELEASES_DIR/"
 rm "$TEMP_DIR/fcm"
 
 # Linux x64
@@ -58,4 +50,3 @@ echo ""
 echo "==> Download commands:"
 echo "  Linux:         curl -sL https://fcm.tryforge.sh/releases/fcm-linux-x64.tar.gz | tar xz && sudo mv fcm /usr/local/bin/"
 echo "  Apple Silicon: curl -sL https://fcm.tryforge.sh/releases/fcm-macos-arm64.tar.gz | tar xz && sudo mv fcm /usr/local/bin/"
-echo "  Intel Mac:     curl -sL https://fcm.tryforge.sh/releases/fcm-macos-x64.tar.gz | tar xz && sudo mv fcm /usr/local/bin/"
