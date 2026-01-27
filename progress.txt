@@ -2204,3 +2204,25 @@
 - Colored output consistent with other fcm commands
 - All 102 tests pass with zero clippy warnings
 - Merge commit: 04f1fc6
+
+### Task 122: Migrate Domain from sslip.io to tryforge.sh
+- Changed all domain references from sslip.io to tryforge.sh
+- **OAuth changes**:
+  - Redirect URI now uses `https://fcm.tryforge.sh/oauth2/callback`
+  - Login validation checks for tryforge.sh instead of sslip.io
+- **Domain generation**:
+  - VM domains now use `{name}.tryforge.sh` format (simpler, no IP in domain)
+  - Main service domain is `fcm.tryforge.sh`
+  - WebSocket console at `wss://fcm.tryforge.sh/console`
+- **Files modified**:
+  - src/client.rs: Updated `status_url()`, `status_page_url()`, login validation
+  - src/caddy.rs: Updated `generate_domain()` to return `{name}.tryforge.sh`
+  - src/daemon.rs: OAuth redirect URIs, WebSocket host, status page comments
+  - src/console.rs: WebSocket URL, API URL functions
+  - src/vm.rs: Domain fallback, comments
+  - src/git.rs: Test domain references
+  - README.md: All documentation URLs and examples
+  - PRD.md: Specification URLs and examples
+  - scripts/build-releases.sh: Download command URLs
+- All 102 tests pass with zero clippy warnings
+- Commit: e45a2f8
