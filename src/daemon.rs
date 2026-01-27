@@ -557,7 +557,7 @@ fn generate_status_html(stats: &DaemonStats, user: Option<&UserRecord>) -> Strin
             html_escape(&u.name)
         ),
         None => {
-            let redirect_uri = format!("https://fcm.{}.sslip.io{}", stats.server_ip.replace('.', "-"), OAUTH_CALLBACK_PATH);
+            let redirect_uri = format!("https://fcm.tryforge.sh{}", OAUTH_CALLBACK_PATH);
             let auth_url = build_google_auth_url(&redirect_uri, None);
             format!(
                 r#"<div style="float:right;"><a href="{}" style="display:inline-block;padding:8px 16px;background:#4285f4;color:#fff;text-decoration:none;border-radius:4px;font-size:0.9em;">Login with Google</a></div>"#,
@@ -764,8 +764,8 @@ fn html_escape(s: &str) -> String {
 }
 
 /// Generate the web console HTML page with xterm.js
-fn generate_web_console_html(vm_name: &str, server_ip: &str) -> String {
-    let ws_host = format!("fcm.{}.sslip.io", server_ip.replace('.', "-"));
+fn generate_web_console_html(vm_name: &str, _server_ip: &str) -> String {
+    let ws_host = "fcm.tryforge.sh";
     format!(
         r##"<!DOCTYPE html>
 <html lang="en">
@@ -2178,7 +2178,7 @@ fn run_status_server(stats: Arc<DaemonStats>, sessions: SessionStore, console_fd
             });
 
             // Route request
-            let base_url = format!("https://fcm.{}.sslip.io", stats.server_ip.replace('.', "-"));
+            let base_url = "https://fcm.tryforge.sh".to_string();
 
             if method == "GET" {
                 // Handle CLI login initiation
@@ -2595,7 +2595,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     let oauth_sessions: SessionStore = Arc::new(Mutex::new(HashMap::new()));
 
     // Setup status page domain in Caddy with WebSocket console support
-    // fcm.{ip}.sslip.io -> /console proxies to 7778, /* to 7780
+    // fcm.tryforge.sh -> /console proxies to 7778, /* to 7780
     let status_domain = caddy::generate_domain("fcm", &server_ip);
     println!("Setting up status page at https://{}", status_domain);
     println!("WebSocket console available at wss://{}/console", status_domain);

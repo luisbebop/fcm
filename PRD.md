@@ -103,7 +103,7 @@ no async runtime - sync http only.
 
 ## ssl/domain
 
-- sslip.io: `<name>.64-34-93-45.sslip.io`
+- domain: `<name>.tryforge.sh`
 - caddy auto-ssl via let's encrypt
 - append block to `/etc/caddy/Caddyfile`, reload
 
@@ -216,7 +216,7 @@ remote: -----> Deploying to cosmic-nova...
 remote: -----> Detected Python (requirements.txt)
 remote: -----> Running pip install...
 remote: -----> Starting: python app.py
-remote: -----> Live at https://cosmic-nova.64-34-93-45.sslip.io
+remote: -----> Live at https://cosmic-nova.tryforge.sh
 ```
 
 ## base image
@@ -278,7 +278,7 @@ build: `docker build + docker export + dd + mkfs.ext4 + tar extract`
   "name": "myvm",
   "ip": "172.16.0.50",
   "state": "running",
-  "expose": {"port": 3000, "domain": "myvm.64-34-93-45.sslip.io"}
+  "expose": {"port": 3000, "domain": "myvm.tryforge.sh"}
 }
 ```
 
@@ -290,7 +290,7 @@ build: `docker build + docker export + dd + mkfs.ext4 + tar extract`
 4. `fcm console cosmic-nova` - open persistent console, verify ruby/python available
 5. disconnect (Ctrl+] or close terminal)
 6. `fcm console cosmic-nova` - reconnect to same session, verify state preserved
-7. `curl https://cosmic-nova.64-34-93-45.sslip.io` - verify ssl works
+7. `curl https://cosmic-nova.tryforge.sh` - verify ssl works
 8. `fcm destroy cosmic-nova` - cleanup
 
 ## multi-user authentication
@@ -302,7 +302,7 @@ per-user tokens so each user can only see/manage their own VMs.
 ```
 1. user runs: fcm login
 2. cli starts local server on 127.0.0.1:9876
-3. cli opens browser to: https://fcm.{ip}.sslip.io/cli-login?port=9876
+3. cli opens browser to: https://fcm.tryforge.sh/cli-login?port=9876
 4. status page redirects to google oauth
 5. after oauth success, status page generates token
 6. status page redirects to: http://127.0.0.1:9876/callback?token=fcm_abc123...
@@ -587,7 +587,7 @@ This ensures the VM has proper terminfo for the client's terminal type.
 
 ```
 WebSocket URL:
-  wss://fcm.{ip}.sslip.io/console?vm={vm-name}&cols={cols}&rows={rows}&env=TERM=xterm-256color&env=SHELL=/bin/zsh
+  wss://fcm.tryforge.sh/console?vm={vm-name}&cols={cols}&rows={rows}&env=TERM=xterm-256color&env=SHELL=/bin/zsh
 
 Query Parameters:
   vm        - VM name (required)
@@ -683,7 +683,7 @@ native-tls = "0.2"  # TLS for wss:// client connections
 Add WebSocket proxy to Caddyfile for the `/console` path:
 
 ```caddyfile
-fcm.{ip}.sslip.io {
+fcm.tryforge.sh {
     # Existing routes...
 
     # WebSocket console - proxy to daemon
@@ -833,7 +833,7 @@ This is optional but improves terminal compatibility.
 **New connect() flow:**
 ```rust
 pub fn connect(vm: &str) -> Result<(), ConsoleError> {
-    let host = api_host();  // e.g., "fcm.64-34-93-45.sslip.io"
+    let host = api_host();  // e.g., "fcm.tryforge.sh"
     let token = load_token()?;
     let (cols, rows) = get_terminal_size();
 

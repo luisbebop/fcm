@@ -84,12 +84,11 @@ fn is_valid_ipv4(s: &str) -> bool {
     parts.iter().all(|p| p.parse::<u8>().is_ok())
 }
 
-/// Generate sslip.io domain for a VM
-/// Format: <name>.<ip-with-dashes>.sslip.io
-/// Example: myvm.64-34-93-45.sslip.io
-pub fn generate_domain(vm_name: &str, server_ip: &str) -> String {
-    let ip_dashed = server_ip.replace('.', "-");
-    format!("{}.{}.sslip.io", vm_name, ip_dashed)
+/// Generate tryforge.sh domain for a VM
+/// Format: <name>.tryforge.sh
+/// Example: myvm.tryforge.sh
+pub fn generate_domain(vm_name: &str, _server_ip: &str) -> String {
+    format!("{}.tryforge.sh", vm_name)
 }
 
 /// Generate Caddy config block for a VM
@@ -325,19 +324,19 @@ mod tests {
     fn test_generate_domain() {
         assert_eq!(
             generate_domain("myvm", "64.34.93.45"),
-            "myvm.64-34-93-45.sslip.io"
+            "myvm.tryforge.sh"
         );
         assert_eq!(
             generate_domain("test", "192.168.1.1"),
-            "test.192-168-1-1.sslip.io"
+            "test.tryforge.sh"
         );
     }
 
     #[test]
     fn test_generate_caddy_block() {
-        let block = generate_caddy_block("myvm.64-34-93-45.sslip.io", "172.16.0.50", 3000);
-        assert!(block.contains("# fcm-managed: myvm.64-34-93-45.sslip.io"));
-        assert!(block.contains("myvm.64-34-93-45.sslip.io {"));
+        let block = generate_caddy_block("myvm.tryforge.sh", "172.16.0.50", 3000);
+        assert!(block.contains("# fcm-managed: myvm.tryforge.sh"));
+        assert!(block.contains("myvm.tryforge.sh {"));
         assert!(block.contains("reverse_proxy 172.16.0.50:3000"));
     }
 
@@ -469,9 +468,9 @@ other.com {
 
     #[test]
     fn test_generate_fcm_domain_block() {
-        let block = generate_fcm_domain_block("fcm.64-34-93-45.sslip.io", 7780, 7778);
-        assert!(block.contains("# fcm-managed: fcm.64-34-93-45.sslip.io"));
-        assert!(block.contains("fcm.64-34-93-45.sslip.io {"));
+        let block = generate_fcm_domain_block("fcm.tryforge.sh", 7780, 7778);
+        assert!(block.contains("# fcm-managed: fcm.tryforge.sh"));
+        assert!(block.contains("fcm.tryforge.sh {"));
         assert!(block.contains("handle /console {"));
         assert!(block.contains("reverse_proxy localhost:7778"));
         assert!(block.contains("reverse_proxy localhost:7780"));
@@ -482,10 +481,10 @@ other.com {
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path().to_str().unwrap();
 
-        add_fcm_domain_to_file("fcm.64-34-93-45.sslip.io", 7780, 7778, path).unwrap();
+        add_fcm_domain_to_file("fcm.tryforge.sh", 7780, 7778, path).unwrap();
 
         let content = fs::read_to_string(path).unwrap();
-        assert!(content.contains("# fcm-managed: fcm.64-34-93-45.sslip.io"));
+        assert!(content.contains("# fcm-managed: fcm.tryforge.sh"));
         assert!(content.contains("handle /console {"));
         assert!(content.contains("reverse_proxy localhost:7778"));
         assert!(content.contains("reverse_proxy localhost:7780"));

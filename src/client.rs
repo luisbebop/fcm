@@ -36,18 +36,11 @@ fn daemon_url() -> String {
 }
 
 /// Get the status page URL (used for sessions API)
-/// This is the fcm.{ip}.sslip.io URL that Caddy proxies
+/// This is the fcm.tryforge.sh URL that Caddy proxies
 fn status_url() -> String {
-    if let Ok(host) = env::var("FCM_HOST") {
-        // Extract hostname from FCM_HOST (remove scheme and port)
-        let host = host
-            .trim_start_matches("http://")
-            .trim_start_matches("https://");
-        let hostname = host.split(':').next().unwrap_or(host);
-
-        // Replace dots with dashes for sslip.io format
-        let ip_dashed = hostname.replace('.', "-");
-        format!("https://fcm.{}.sslip.io", ip_dashed)
+    if env::var("FCM_HOST").is_ok() {
+        // Use tryforge.sh domain when FCM_HOST is set
+        "https://fcm.tryforge.sh".to_string()
     } else {
         // Local development - use localhost status server
         "http://127.0.0.1:7780".to_string()
@@ -605,13 +598,9 @@ struct AuthMeResponse {
 
 /// Get FCM status page URL from FCM_HOST
 fn status_page_url() -> String {
-    if let Ok(host) = env::var("FCM_HOST") {
-        // Extract hostname from FCM_HOST (strip scheme and port)
-        let host = host.trim_start_matches("http://").trim_start_matches("https://");
-        let hostname = host.split(':').next().unwrap_or(host);
-        // Convert IP to sslip.io format
-        let sslip_hostname = hostname.replace('.', "-");
-        format!("https://fcm.{}.sslip.io", sslip_hostname)
+    if env::var("FCM_HOST").is_ok() {
+        // Use tryforge.sh domain when FCM_HOST is set
+        "https://fcm.tryforge.sh".to_string()
     } else {
         // Default to localhost - won't work for OAuth but needed for local testing
         "http://127.0.0.1:7780".to_string()
@@ -671,7 +660,7 @@ pub fn login() -> Result<(), Box<dyn Error>> {
     let base_url = status_page_url();
 
     // Check FCM_HOST is set for remote connections
-    if !base_url.contains("sslip.io") {
+    if !base_url.contains("tryforge.sh") {
         return Err("FCM_HOST must be set to the server IP (e.g., FCM_HOST=64.34.93.45:7777)".into());
     }
 
@@ -967,7 +956,7 @@ mod tests {
             "created_at": 1700000000,
             "expose": {
                 "port": 3000,
-                "domain": "test-vm.64-34-93-45.sslip.io"
+                "domain": "test-vm.tryforge.sh"
             },
             "git_url": "root@myserver.com:test-vm.git"
         }"#;
@@ -980,7 +969,7 @@ mod tests {
         assert!(vm.expose.is_some());
         let expose = vm.expose.unwrap();
         assert_eq!(expose.port, 3000);
-        assert_eq!(expose.domain, "test-vm.64-34-93-45.sslip.io");
+        assert_eq!(expose.domain, "test-vm.tryforge.sh");
         assert_eq!(vm.git_url, Some("root@myserver.com:test-vm.git".to_string()));
     }
 
@@ -1047,12 +1036,12 @@ mod tests {
     fn test_local_config_serialization() {
         let config = LocalConfig {
             name: "cosmic-nova".to_string(),
-            url: Some("https://cosmic-nova.64-34-93-45.sslip.io".to_string()),
+            url: Some("https://cosmic-nova.tryforge.sh".to_string()),
             git: Some("root@64.34.93.45:cosmic-nova.git".to_string()),
         };
         let json = serde_json::to_string(&config).unwrap();
         assert!(json.contains("cosmic-nova"));
-        assert!(json.contains("sslip.io"));
+        assert!(json.contains("tryforge.sh"));
     }
 
     #[test]

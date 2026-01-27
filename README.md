@@ -7,7 +7,7 @@ A dead-simple CLI for running microVMs on bare metal. Create a VM, push your cod
 ```
 $ fcm create
 VM created: cosmic-nova
-URL: https://cosmic-nova.64-34-93-45.sslip.io
+URL: https://cosmic-nova.tryforge.sh
 
 $ git push origin main
 -----> Deploying to cosmic-nova...
@@ -15,7 +15,7 @@ $ git push origin main
 -----> Running pip install...
 -----> Starting: gunicorn app:app
 -----> Deploy successful!
-       https://cosmic-nova.64-34-93-45.sslip.io
+       https://cosmic-nova.tryforge.sh
 ```
 
 ## What is this?
@@ -104,7 +104,7 @@ fcm console cosmic-nova -s brook
 
 ## Web Console
 
-Access your VMs from any browser at `https://fcm.<ip>.sslip.io`:
+Access your VMs from any browser at `https://fcm.tryforge.sh`:
 
 1. Visit the status page URL shown when daemon starts
 2. Login with Google OAuth
@@ -273,8 +273,7 @@ To enable multi-user authentication with Google OAuth:
 4. Go to **APIs & Services > Credentials**
 5. Click **Create Credentials > OAuth client ID**
 6. Select **Web application**
-7. Add authorized redirect URI: `https://fcm.<your-ip-dashed>.sslip.io/oauth2/callback`
-   - Example: `https://fcm.64-34-93-45.sslip.io/oauth2/callback`
+7. Add authorized redirect URI: `https://fcm.tryforge.sh/oauth2/callback`
 8. Copy the Client ID and Client Secret
 
 Set the environment variables before starting the daemon:
@@ -334,7 +333,7 @@ On your local machine:
 
 ```bash
 # Download the client binary
-curl -sL https://fcm.<ip>.sslip.io/releases/fcm-macos-arm64.tar.gz | tar xz
+curl -sL https://fcm.tryforge.sh/releases/fcm-macos-arm64.tar.gz | tar xz
 sudo mv fcm /usr/local/bin/
 
 # Set the server address
@@ -369,10 +368,10 @@ fcm login
 │                      │                                                     │
 │  ┌───────────────────┴───────────────────┐                                 │
 │  │                Caddy                  │  Reverse Proxy + Auto SSL       │
-│  │  vm1.x.x.x.sslip.io → 172.16.0.50    │                                 │
-│  │  vm2.x.x.x.sslip.io → 172.16.0.51    │  Port 443 (HTTPS)               │
-│  │  fcm.x.x.x.sslip.io/console → :7778  │  WebSocket console              │
-│  │  fcm.x.x.x.sslip.io/* → :7780        │  Status page                    │
+│  │  vm1.tryforge.sh → 172.16.0.50       │                                 │
+│  │  vm2.tryforge.sh → 172.16.0.51       │  Port 443 (HTTPS)               │
+│  │  fcm.tryforge.sh/console → :7778     │  WebSocket console              │
+│  │  fcm.tryforge.sh/* → :7780           │  Status page                    │
 │  └───────────────────┬───────────────────┘                                 │
 │                      │                                                     │
 │  ┌───────────────────┴───────────────────┐                                 │
@@ -524,7 +523,7 @@ export FCM_TOKEN="your-token"
 - Use `sudo -E` to preserve environment variables
 
 **OAuth callback fails**
-- Verify redirect URI in Google Console matches: `https://fcm.<ip-dashed>.sslip.io/oauth2/callback`
+- Verify redirect URI in Google Console matches: `https://fcm.tryforge.sh/oauth2/callback`
 - Check Caddy is running and SSL certificate was issued
 
 ### VM Issues
@@ -600,9 +599,9 @@ sudo ufw status
 sudo iptables -L -n | grep -E "80|443"
 ```
 
-**sslip.io not resolving**
-- Requires public IP (not private/NAT)
-- Try: `nslookup vm-name.64-34-93-45.sslip.io`
+**Domain not resolving**
+- Ensure DNS is properly configured for tryforge.sh
+- Try: `nslookup vm-name.tryforge.sh`
 
 ### Git Push Issues
 
@@ -684,7 +683,7 @@ sudo ./build.sh
 
 ```bash
 # Download latest from status page
-curl -sL https://fcm.<ip>.sslip.io/releases/fcm-macos-arm64.tar.gz | tar xz
+curl -sL https://fcm.tryforge.sh/releases/fcm-macos-arm64.tar.gz | tar xz
 sudo mv fcm /usr/local/bin/
 ```
 

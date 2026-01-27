@@ -207,19 +207,9 @@ fn url_encode(s: &str) -> String {
 /// Get the WebSocket URL base for console connections
 /// Uses FCM_HOST env var to determine the server
 fn get_websocket_url_base() -> String {
-    if let Ok(host) = env::var("FCM_HOST") {
-        // Extract hostname from FCM_HOST (remove scheme and port)
-        let host = host
-            .trim_start_matches("http://")
-            .trim_start_matches("https://");
-
-        // For FCM_HOST, the fcm domain uses the IP with dashes
-        // e.g., FCM_HOST=64.34.93.45:7777 -> fcm.64-34-93-45.sslip.io
-        let hostname = host.split(':').next().unwrap_or(host);
-
-        // Replace dots with dashes for sslip.io format
-        let ip_dashed = hostname.replace('.', "-");
-        format!("wss://fcm.{}.sslip.io/console", ip_dashed)
+    if env::var("FCM_HOST").is_ok() {
+        // Use tryforge.sh domain when FCM_HOST is set
+        "wss://fcm.tryforge.sh/console".to_string()
     } else {
         // Local development - use localhost without TLS
         "ws://127.0.0.1:7778/console".to_string()
@@ -261,16 +251,9 @@ fn load_token() -> Result<String, ConsoleError> {
 
 /// Get the HTTP API base URL for file uploads
 fn get_api_url_base() -> String {
-    if let Ok(host) = env::var("FCM_HOST") {
-        // Extract hostname from FCM_HOST (remove scheme and port)
-        let host = host
-            .trim_start_matches("http://")
-            .trim_start_matches("https://");
-        let hostname = host.split(':').next().unwrap_or(host);
-
-        // Replace dots with dashes for sslip.io format
-        let ip_dashed = hostname.replace('.', "-");
-        format!("https://fcm.{}.sslip.io", ip_dashed)
+    if env::var("FCM_HOST").is_ok() {
+        // Use tryforge.sh domain when FCM_HOST is set
+        "https://fcm.tryforge.sh".to_string()
     } else {
         // Local development
         "http://127.0.0.1:7777".to_string()
@@ -700,7 +683,7 @@ mod tests {
     fn test_websocket_url_from_env() {
         env::set_var("FCM_HOST", "192.168.1.100:7777");
         let url = get_websocket_url_base();
-        assert!(url.contains("fcm.192-168-1-100.sslip.io"));
+        assert!(url.contains("fcm.tryforge.sh"));
         assert!(url.starts_with("wss://"));
         env::remove_var("FCM_HOST");
     }
@@ -709,7 +692,7 @@ mod tests {
     fn test_websocket_url_with_scheme() {
         env::set_var("FCM_HOST", "http://10.0.0.5:7777");
         let url = get_websocket_url_base();
-        assert!(url.contains("fcm.10-0-0-5.sslip.io"));
+        assert!(url.contains("fcm.tryforge.sh"));
         assert!(url.starts_with("wss://"));
         env::remove_var("FCM_HOST");
     }
@@ -846,7 +829,7 @@ mod tests {
     fn test_api_url_from_env() {
         env::set_var("FCM_HOST", "192.168.1.100:7777");
         let url = get_api_url_base();
-        assert!(url.contains("fcm.192-168-1-100.sslip.io"));
+        assert!(url.contains("fcm.tryforge.sh"));
         assert!(url.starts_with("https://"));
         env::remove_var("FCM_HOST");
     }

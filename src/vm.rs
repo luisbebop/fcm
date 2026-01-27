@@ -519,7 +519,7 @@ pub fn create_vm(name: Option<String>, expose_port: Option<u16>, ssh_public_key:
 
     // Create VM config
     let expose_config = if let Some(port) = expose_port {
-        // Get server public IP for sslip.io domain
+        // Get server public IP for tryforge.sh domain
         let server_ip = caddy::get_server_ip()?;
         let domain = caddy::generate_domain(&vm_name, &server_ip);
         Some(ExposeConfig { port, domain })
@@ -656,7 +656,7 @@ pub fn create_vm(name: Option<String>, expose_port: Option<u16>, ssh_public_key:
         .expose
         .as_ref()
         .map(|e| e.domain.clone())
-        .unwrap_or_else(|| format!("{}.sslip.io", config.name));
+        .unwrap_or_else(|| format!("{}.tryforge.sh", config.name));
     if let Err(e) = git::create_repo(&config.name, &config.ip, &git_domain) {
         eprintln!("Warning: Failed to create git repo: {}", e);
         // Don't fail the VM creation for this
@@ -1002,7 +1002,7 @@ mod tests {
     fn test_vm_config_with_expose() {
         let expose = ExposeConfig {
             port: 3000,
-            domain: "myvm.64-34-93-45.sslip.io".to_string(),
+            domain: "myvm.tryforge.sh".to_string(),
         };
         let config = VmConfig::new(Some("myvm".to_string()), "172.16.0.50".to_string(), Some(expose), None);
         assert!(config.expose.is_some());

@@ -232,7 +232,7 @@ mod tests {
 
     #[test]
     fn test_generate_post_receive_hook() {
-        let hook = generate_post_receive_hook("test-vm", "172.16.0.50", "test-vm.64-34-93-45.sslip.io");
+        let hook = generate_post_receive_hook("test-vm", "172.16.0.50", "test-vm.tryforge.sh");
         assert!(hook.contains("test-vm"));
         assert!(hook.contains("172.16.0.50"));
         assert!(hook.contains("fcm-deploy"));
@@ -241,7 +241,7 @@ mod tests {
         assert!(hook.contains("Deploy failed!"));
         assert!(hook.contains("Startup logs:"));
         assert!(hook.contains("fcm-web.log"));
-        assert!(hook.contains(r#"DOMAIN="test-vm.64-34-93-45.sslip.io""#));
+        assert!(hook.contains(r#"DOMAIN="test-vm.tryforge.sh""#));
         assert!(hook.contains("https://$DOMAIN"));
     }
 
