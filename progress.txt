@@ -2334,3 +2334,14 @@
 - Updated `setup_masquerade()` in src/network.rs to include the isolation rule
 - All 105 tests pass with zero clippy warnings
 - Commit: 2fa3ec0
+
+### Task 124c: Fix Bridge Netfilter for VM Isolation
+- **Issue**: VM-to-VM SSH blocking wasn't working because bridge traffic (layer 2) bypasses iptables/nftables
+- **Fix**: Load `br_netfilter` module and enable `bridge-nf-call-iptables`
+- Added to `setup_network()` in src/network.rs:
+  - `modprobe br_netfilter`
+  - Write `1` to `/proc/sys/net/bridge/bridge-nf-call-iptables`
+  - Write `1` to `/proc/sys/net/bridge/bridge-nf-call-ip6tables`
+- **Verified**: VM-to-VM SSH now blocked, host-to-VM SSH still works
+- All 105 tests pass with zero clippy warnings
+- Commit: c068765
