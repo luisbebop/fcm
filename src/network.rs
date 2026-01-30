@@ -210,8 +210,9 @@ fn setup_masquerade() -> Result<()> {
         return Ok(());
     }
 
-    // Create nftables rules for masquerading
+    // Create nftables rules for masquerading and VM isolation
     // This allows VMs to access the internet through the host
+    // but blocks direct VM-to-VM SSH connections for security
     let nft_rules = r#"
 table ip fcm {
     chain postrouting {
@@ -220,6 +221,8 @@ table ip fcm {
     }
     chain forward {
         type filter hook forward priority filter; policy accept;
+        # Block VM-to-VM SSH (isolation) - host can still SSH to VMs
+        ip saddr 172.16.0.0/24 ip daddr 172.16.0.0/24 tcp dport 22 drop
         iifname "fcm0" accept
         oifname "fcm0" accept
     }
