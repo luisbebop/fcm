@@ -2289,3 +2289,38 @@
 - **Task 123b**: Fixed Caddy routing - API routes now go to daemon (7777), not status page (7780)
 - **Task 123c**: Git URLs use `git.tryforge.sh` (DNS-only record for SSH access)
 - Commits: 435b4d8, 8af8a86, f5dfeed
+
+### Task 124: Security Fix - Restrict SSH Keys to Git-Only Access
+- **Critical security vulnerability fixed**: Previously anyone who ran `fcm create` got full root shell access to the main server
+- Root cause: SSH public keys were added to `/root/.ssh/authorized_keys` without any command restrictions
+- **Solution**: Created a restricted git shell wrapper and command prefix for authorized_keys entries
+
+**New components:**
+- `fcm-git-shell` script at `/usr/local/bin/fcm-git-shell`:
+  - Only allows `git-receive-pack` and `git-upload-pack` commands
+  - Validates repository paths to prevent traversal attacks
+  - Rejects interactive shell access with clear error message
+  - Handles various path formats: `/root/vm.git`, `vm.git`, `./vm.git`
+
+**Code changes (src/git.rs):**
+- Added `FCM_GIT_SHELL_PATH` constant
+- Added `generate_git_shell_script()` to generate the shell wrapper content
+- Added `ensure_git_shell_installed()` to install/update the script
+- Added `extract_raw_key()` to parse keys from authorized_keys lines
+- Updated `add_ssh_key_to_host()` to add command restriction prefix:
+  ```
+  command="/usr/local/bin/fcm-git-shell",no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-pty ssh-ed25519 AAAA...
+  ```
+
+**Server cleanup:**
+- Removed invalid "test-key" line from `/root/.ssh/authorized_keys`
+- Installed `fcm-git-shell` script at `/usr/local/bin/fcm-git-shell`
+- Existing admin keys (cloudwalk.io, luisbebop, etc.) preserved for server access
+
+**New tests:**
+- `test_extract_raw_key`: Verifies key extraction from various formats
+- `test_generate_git_shell_script`: Verifies shell script content
+- `test_restricted_key_format`: Verifies authorized_keys entry format
+
+- All 105 tests pass with zero clippy warnings
+- Commit: 81c6605
