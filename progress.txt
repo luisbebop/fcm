@@ -2324,3 +2324,13 @@
 
 - All 105 tests pass with zero clippy warnings
 - Commit: 81c6605
+
+### Task 124b: Security Fix - Block VM-to-VM SSH Connections
+- **Security issue**: All VMs use password `root:root` and share the same network (172.16.0.x)
+- One VM user could SSH to another user's VM if they guessed the IP
+- **Fix**: Added nftables rule to block inter-VM SSH traffic
+- Rule: `ip saddr 172.16.0.0/24 ip daddr 172.16.0.0/24 tcp dport 22 drop`
+- Host (172.16.0.1) can still SSH to VMs for deployment (traffic doesn't go through FORWARD chain)
+- Updated `setup_masquerade()` in src/network.rs to include the isolation rule
+- All 105 tests pass with zero clippy warnings
+- Commit: 2fa3ec0
