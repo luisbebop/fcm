@@ -144,6 +144,13 @@ fn bridge_exists(name: &str) -> bool {
 
 /// Setup the network bridge and masquerading (called once on daemon start)
 pub fn setup_network() -> Result<()> {
+    // Load br_netfilter module and enable bridge filtering
+    // This is required for iptables/nftables to filter bridged traffic
+    // Without this, VM-to-VM traffic bypasses the firewall rules
+    let _ = Command::new("modprobe").arg("br_netfilter").output();
+    let _ = fs::write("/proc/sys/net/bridge/bridge-nf-call-iptables", "1");
+    let _ = fs::write("/proc/sys/net/bridge/bridge-nf-call-ip6tables", "1");
+
     // Create bridge if it doesn't exist
     if !bridge_exists("fcm0") {
         let output = Command::new("ip")
