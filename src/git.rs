@@ -8,6 +8,9 @@ use std::process::Command;
 /// Git repos are stored in /root/<vm-name>.git
 const GIT_REPOS_BASE: &str = "/root";
 
+/// Path to the fcm git shell wrapper script
+const FCM_GIT_SHELL_PATH: &str = "/usr/local/bin/fcm-git-shell";
+
 /// Git operation errors
 #[derive(Debug)]
 pub enum GitError {
@@ -166,8 +169,134 @@ pub fn get_clone_url(vm_name: &str, server_host: &str) -> String {
     format!("root@{}:{}.git", server_host, vm_name)
 }
 
+/// Generate the fcm-git-shell wrapper script content
+/// This script restricts SSH access to only git commands for VM repositories
+fn generate_git_shell_script() -> &'static str {
+    r#"#!/bin/bash
+# FCM Git Shell - Restricts SSH access to git commands only
+# This script is used as a forced command in authorized_keys
+
+set -e
+
+# Only allow git-receive-pack and git-upload-pack commands
+if [ -z "$SSH_ORIGINAL_COMMAND" ]; then
+    echo "ERROR: Interactive shell access is not allowed." >&2
+    echo "This SSH key is restricted to git push/pull operations only." >&2
+    exit 1
+fi
+
+# Parse the command - should be: git-receive-pack 'repo.git' or git-upload-pack 'repo.git'
+CMD=$(echo "$SSH_ORIGINAL_COMMAND" | awk '{print $1}')
+REPO=$(echo "$SSH_ORIGINAL_COMMAND" | sed "s/^[^ ]* '//" | sed "s/'$//")
+
+# Validate command
+case "$CMD" in
+    git-receive-pack|git-upload-pack)
+        ;;
+    *)
+        echo "ERROR: Command not allowed: $CMD" >&2
+        echo "Only git push/pull operations are permitted." >&2
+        exit 1
+        ;;
+esac
+
+# Validate repo path - must be a .git repo in /root/
+# Handle various input formats:
+#   /root/vm-name.git -> vm-name.git
+#   /vm-name.git -> vm-name.git
+#   ./vm-name.git -> vm-name.git
+#   vm-name.git -> vm-name.git
+REPO_CLEAN=$(echo "$REPO" | sed 's|^/root/||' | sed 's|^/||' | sed 's|^\./||')
+
+# Must end in .git
+if [[ ! "$REPO_CLEAN" =~ \.git$ ]]; then
+    echo "ERROR: Invalid repository path." >&2
+    exit 1
+fi
+
+# Must not contain path traversal or subdirectories
+if [[ "$REPO_CLEAN" =~ \.\. ]] || [[ "$REPO_CLEAN" =~ / ]]; then
+    echo "ERROR: Invalid repository path." >&2
+    exit 1
+fi
+
+# Build full path
+FULL_PATH="/root/$REPO_CLEAN"
+
+# Check repo exists
+if [ ! -d "$FULL_PATH" ]; then
+    echo "ERROR: Repository not found." >&2
+    exit 1
+fi
+
+# Execute the git command
+exec $CMD "$FULL_PATH"
+"#
+}
+
+/// Install the fcm-git-shell script if it doesn't exist or is outdated
+pub fn ensure_git_shell_installed() -> Result<(), GitError> {
+    let script_content = generate_git_shell_script();
+    let script_path = PathBuf::from(FCM_GIT_SHELL_PATH);
+
+    // Check if script exists and matches current content
+    let needs_update = if script_path.exists() {
+        match fs::read_to_string(&script_path) {
+            Ok(existing) => existing != script_content,
+            Err(_) => true,
+        }
+    } else {
+        true
+    };
+
+    if needs_update {
+        // Ensure parent directory exists
+        if let Some(parent) = script_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        fs::write(&script_path, script_content)?;
+
+        // Make executable
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&script_path, fs::Permissions::from_mode(0o755))?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Extract the raw key from an authorized_keys line (removes any command prefix)
+fn extract_raw_key(line: &str) -> Option<&str> {
+    let line = line.trim();
+    if line.is_empty() || line.starts_with('#') {
+        return None;
+    }
+
+    // If line starts with ssh- or ecdsa-, it's already a raw key
+    if line.starts_with("ssh-") || line.starts_with("ecdsa-") {
+        return Some(line);
+    }
+
+    // Otherwise, find the key portion after options
+    // Keys start with: ssh-rsa, ssh-ed25519, ssh-dss, ecdsa-sha2-*
+    for prefix in &["ssh-rsa ", "ssh-ed25519 ", "ssh-dss ", "ecdsa-sha2-"] {
+        if let Some(pos) = line.find(prefix) {
+            return Some(&line[pos..]);
+        }
+    }
+
+    None
+}
+
 /// Add an SSH public key to the host's authorized_keys for git push access
+/// Keys are added with a forced command that restricts access to git operations only
 pub fn add_ssh_key_to_host(ssh_public_key: &str) -> Result<(), GitError> {
+    // Ensure git shell is installed first
+    ensure_git_shell_installed()?;
+
     let ssh_dir = PathBuf::from("/root/.ssh");
     let authorized_keys_path = ssh_dir.join("authorized_keys");
 
@@ -188,18 +317,31 @@ pub fn add_ssh_key_to_host(ssh_public_key: &str) -> Result<(), GitError> {
         String::new()
     };
 
-    // Check if key already exists (avoid duplicates)
+    // Check if key already exists (compare raw key portion)
     let key_trimmed = ssh_public_key.trim();
-    if existing.lines().any(|line| line.trim() == key_trimmed) {
-        return Ok(()); // Key already exists
+    let key_raw = extract_raw_key(key_trimmed).unwrap_or(key_trimmed);
+
+    for line in existing.lines() {
+        if let Some(existing_raw) = extract_raw_key(line) {
+            if existing_raw == key_raw {
+                return Ok(()); // Key already exists
+            }
+        }
     }
+
+    // Build restricted key entry with forced command
+    let restricted_key = format!(
+        r#"command="{}",no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-pty {}"#,
+        FCM_GIT_SHELL_PATH,
+        key_trimmed
+    );
 
     // Append the new key
     let mut content = existing;
     if !content.is_empty() && !content.ends_with('\n') {
         content.push('\n');
     }
-    content.push_str(key_trimmed);
+    content.push_str(&restricted_key);
     content.push('\n');
 
     fs::write(&authorized_keys_path, content)?;
@@ -271,5 +413,72 @@ mod tests {
         let key_with_spaces = "  ssh-ed25519 AAAAC3... user@host  \n";
         let trimmed = key_with_spaces.trim();
         assert_eq!(trimmed, "ssh-ed25519 AAAAC3... user@host");
+    }
+
+    #[test]
+    fn test_extract_raw_key() {
+        // Raw key without options
+        let raw = "ssh-ed25519 AAAAC3NzaC1... user@host";
+        assert_eq!(extract_raw_key(raw), Some(raw));
+
+        // Key with command prefix
+        let with_prefix = r#"command="/usr/local/bin/fcm-git-shell",no-pty ssh-ed25519 AAAAC3NzaC1... user@host"#;
+        assert_eq!(
+            extract_raw_key(with_prefix),
+            Some("ssh-ed25519 AAAAC3NzaC1... user@host")
+        );
+
+        // RSA key
+        let rsa = "ssh-rsa AAAAB3NzaC1yc2E... user@host";
+        assert_eq!(extract_raw_key(rsa), Some(rsa));
+
+        // Empty and comment lines
+        assert_eq!(extract_raw_key(""), None);
+        assert_eq!(extract_raw_key("# comment"), None);
+        assert_eq!(extract_raw_key("   "), None);
+    }
+
+    #[test]
+    fn test_generate_git_shell_script() {
+        let script = generate_git_shell_script();
+
+        // Should be a bash script
+        assert!(script.starts_with("#!/bin/bash"));
+
+        // Should check SSH_ORIGINAL_COMMAND
+        assert!(script.contains("SSH_ORIGINAL_COMMAND"));
+
+        // Should only allow git commands
+        assert!(script.contains("git-receive-pack"));
+        assert!(script.contains("git-upload-pack"));
+
+        // Should reject interactive shells
+        assert!(script.contains("Interactive shell access is not allowed"));
+
+        // Should prevent path traversal (checks for .. pattern)
+        assert!(script.contains(r"\.\.")); // regex pattern for ..
+    }
+
+    #[test]
+    fn test_restricted_key_format() {
+        // Verify the format of restricted keys
+        let key = "ssh-ed25519 AAAAC3... user@host";
+        let restricted = format!(
+            r#"command="{}",no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-pty {}"#,
+            FCM_GIT_SHELL_PATH,
+            key
+        );
+
+        // Should contain the forced command
+        assert!(restricted.contains("command=\"/usr/local/bin/fcm-git-shell\""));
+
+        // Should have security restrictions
+        assert!(restricted.contains("no-port-forwarding"));
+        assert!(restricted.contains("no-agent-forwarding"));
+        assert!(restricted.contains("no-X11-forwarding"));
+        assert!(restricted.contains("no-pty"));
+
+        // Should end with the actual key
+        assert!(restricted.ends_with(key));
     }
 }
